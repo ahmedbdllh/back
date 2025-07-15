@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { handleImageError } from '../../../shared/utils/imageUtils';
 
 const TeamForm = ({ 
   teamName, 
@@ -122,19 +123,9 @@ const TeamForm = ({
                       src={teamLogo.preview}
                       alt="Team logo"
                       className="w-full h-full object-cover rounded-lg"
-                      onError={(e) => {
-                        console.error('Error loading image:', e.target?.src || 'Unknown source');
-                        // Prevent default error handling
-                        e.preventDefault();
-                        // Hide the broken image and show fallback
-                        if (e.target) {
-                          e.target.style.display = 'none';
-                        }
-                        // Show the fallback icon by clearing teamLogo
-                        setTeamLogo(null);
-                      }}
+                      onError={(e) => handleImageError(e, 'team', 'Team Logo Preview')}
                       onLoad={() => {
-                        console.log('Image loaded successfully');
+                        console.log('Team logo preview loaded successfully');
                       }}
                     />
                   ) : (

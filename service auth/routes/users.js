@@ -160,9 +160,8 @@ router.post('/bulk', auth, async (req, res) => {
             return res.status(400).json({ error: 'userIds array is required' });
         }
 
-        const users = await User.find({
-            _id: { $in: userIds }
-        }).select('fullName email profileImage preferredSports position role phoneNumber team');
+        const users = await User.find({ _id: { $in: userIds } })
+            .select('fullName email profileImage preferredSports position role phoneNumber team createdAt');
 
         res.json({ users });
     } catch (err) {

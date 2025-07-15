@@ -4,26 +4,36 @@ import { getImageUrl, handleImageError } from '../shared/utils/imageUtils';
 
 const NotificationBell = ({ user }) => {
   const [notifications, setNotifications] = useState([]);
+  const [joinRequests, setJoinRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [processing, setProcessing] = useState({});
   const dropdownRef = useRef(null);
 
-  // Fetch notifications (team invitations)
+  // Fetch notifications (team invitations and join requests)
   const fetchNotifications = async () => {
     if (!user) return;
     
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await axios.get('http://localhost:5004/api/teams/invitations/received', {
+      
+      // Fetch team invitations
+      const invitationsResponse = await axios.get('http://localhost:5004/api/teams/invitations/received', {
         headers: { 'x-auth-token': token }
       });
       
-      setNotifications(response.data.invitations || []);
+      // Fetch join requests (for captains)
+      const joinRequestsResponse = await axios.get('http://localhost:5004/api/teams/join-requests/received', {
+        headers: { 'x-auth-token': token }
+      });
+      
+      setNotifications(invitationsResponse.data.invitations || []);
+      setJoinRequests(joinRequestsResponse.data.joinRequests || []);
     } catch (err) {
       console.error('Error fetching notifications:', err);
       setNotifications([]);
+      setJoinRequests([]);
     } finally {
       setLoading(false);
     }
@@ -85,7 +95,52 @@ const NotificationBell = ({ user }) => {
     }
   };
 
-  const hasNotifications = notifications.length > 0;
+  // Handle approving join request
+  const handleApproveJoinRequest = async (teamId, requestId) => {
+    try {
+      setProcessing(prev => ({ ...prev, [requestId]: 'approving' }));
+      const token = localStorage.getItem('token');
+      
+      await axios.post(`http://localhost:5004/api/teams/${teamId}/handle-request`, {
+        requestId: requestId,
+        action: 'approve'
+      }, {
+        headers: { 'x-auth-token': token }
+      });
+      
+      // Remove the approved request from the list
+      setJoinRequests(joinRequests.filter(req => req._id !== requestId));
+    } catch (err) {
+      console.error('Error approving join request:', err);
+    } finally {
+      setProcessing(prev => ({ ...prev, [requestId]: null }));
+    }
+  };
+
+  // Handle rejecting join request
+  const handleRejectJoinRequest = async (teamId, requestId) => {
+    try {
+      setProcessing(prev => ({ ...prev, [requestId]: 'rejecting' }));
+      const token = localStorage.getItem('token');
+      
+      await axios.post(`http://localhost:5004/api/teams/${teamId}/handle-request`, {
+        requestId: requestId,
+        action: 'reject'
+      }, {
+        headers: { 'x-auth-token': token }
+      });
+      
+      // Remove the rejected request from the list
+      setJoinRequests(joinRequests.filter(req => req._id !== requestId));
+    } catch (err) {
+      console.error('Error rejecting join request:', err);
+    } finally {
+      setProcessing(prev => ({ ...prev, [requestId]: null }));
+    }
+  };
+
+  const hasNotifications = notifications.length > 0 || joinRequests.length > 0;
+  const totalNotifications = notifications.length + joinRequests.length;
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -101,7 +156,7 @@ const NotificationBell = ({ user }) => {
         {/* Notification Badge */}
         {hasNotifications && (
           <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
-            {notifications.length > 9 ? '9+' : notifications.length}
+            {totalNotifications > 9 ? '9+' : totalNotifications}
           </div>
         )}
       </button>
@@ -115,7 +170,7 @@ const NotificationBell = ({ user }) => {
               <h3 className="text-sm font-semibold text-white">Notifications</h3>
               {hasNotifications && (
                 <span className="text-xs text-gray-400 bg-blue-500/20 px-2 py-1 rounded-full">
-                  {notifications.length} pending
+                  {totalNotifications} pending
                 </span>
               )}
             </div>
@@ -139,6 +194,7 @@ const NotificationBell = ({ user }) => {
               </div>
             ) : (
               <div className="divide-y divide-gray-700">
+                {/* Team Invitations */}
                 {notifications.map((invitation) => {
                   // Safety check for team data
                   const teamName = invitation.team?.name || 'Unknown Team';
@@ -159,7 +215,7 @@ const NotificationBell = ({ user }) => {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
                             <h4 className="text-sm font-medium text-white truncate">
-                              {teamName}
+                              Team Invitation: {teamName}
                             </h4>
                             <span className="text-xs text-gray-500 ml-2">
                               {new Date(invitation.invitedAt).toLocaleDateString()}
@@ -167,7 +223,7 @@ const NotificationBell = ({ user }) => {
                           </div>
                           
                           <p className="text-xs text-gray-400 mb-2">
-                            Team invitation from {captainName}
+                            From {captainName} • {teamSport}
                           </p>
                           
                           {invitation.position && (
@@ -218,6 +274,83 @@ const NotificationBell = ({ user }) => {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                   </svg>
                                   <span>Decline</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Join Requests */}
+                {joinRequests.map((request) => {
+                  const playerName = request.userInfo?.fullName || 'Unknown Player';
+                  
+                  return (
+                    <div key={request._id} className="p-4 hover:bg-gray-700/50 transition-colors">
+                      <div className="flex items-start space-x-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-600 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0">
+                          {playerName.charAt(0).toUpperCase()}
+                        </div>
+                        
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <h4 className="text-sm font-medium text-white truncate">
+                              Join Request: {request.teamName}
+                            </h4>
+                            <span className="text-xs text-gray-500 ml-2">
+                              {new Date(request.requestedAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          
+                          <p className="text-xs text-gray-400 mb-2">
+                            From {playerName} • {request.teamSport}
+                          </p>
+                          
+                          {request.message && (
+                            <p className="text-xs text-gray-300 mb-3 italic">
+                              "{request.message}"
+                            </p>
+                          )}
+                          
+                          <div className="flex space-x-2">
+                            <button
+                              onClick={() => handleApproveJoinRequest(request.teamId, request._id)}
+                              disabled={processing[request._id]}
+                              className="flex-1 px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center justify-center space-x-1"
+                            >
+                              {processing[request._id] === 'approving' ? (
+                                <>
+                                  <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin"></div>
+                                  <span>Approving...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                  <span>Approve</span>
+                                </>
+                              )}
+                            </button>
+                            <button
+                              onClick={() => handleRejectJoinRequest(request.teamId, request._id)}
+                              disabled={processing[request._id]}
+                              className="flex-1 px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center justify-center space-x-1"
+                            >
+                              {processing[request._id] === 'rejecting' ? (
+                                <>
+                                  <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin"></div>
+                                  <span>Rejecting...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                  <span>Reject</span>
                                 </>
                               )}
                             </button>

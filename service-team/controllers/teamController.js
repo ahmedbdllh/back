@@ -124,19 +124,29 @@ exports.getTeams = async (req, res) => {
     const users = await fetchUserData([...userIds]);
     const userMap = {};
     users.forEach(user => {
-      userMap[user._id] = user;
+      userMap[user._id.toString()] = user;
     });
 
     // Enrich teams with user data
     const enrichedTeams = teams.map(team => {
       const teamObj = team.toObject();
       
-      // Add captain info
-      teamObj.captainInfo = userMap[team.captain.toString()] || {
-        _id: team.captain,
-        fullName: 'Unknown Captain',
-        email: 'unknown@example.com'
-      };
+      // Add captain info (ensure phoneNumber is included)
+      const captainUser = userMap[team.captain.toString()];
+      teamObj.captainInfo = captainUser
+        ? {
+            _id: captainUser._id,
+            fullName: captainUser.fullName || captainUser.name || 'Unknown Captain',
+            email: captainUser.email || 'unknown@example.com',
+            phoneNumber: captainUser.phoneNumber || 'N/A',
+            // add any other fields you want to expose
+          }
+        : {
+            _id: team.captain,
+            fullName: 'Unknown Captain',
+            email: 'unknown@example.com',
+            phoneNumber: 'N/A',
+          };
 
       // Add member info with user details
       teamObj.members = team.members.map(member => ({
@@ -147,6 +157,20 @@ exports.getTeams = async (req, res) => {
           email: 'unknown@example.com'
         }
       }));
+
+      // Add players field for frontend compatibility (maps to members)
+      teamObj.players = team.members.map(member => {
+        const userInfo = userMap[member.userId.toString()] || {
+          _id: member.userId,
+          fullName: 'Unknown User',
+          email: 'unknown@example.com'
+        };
+        return {
+          ...member.toObject(),
+          ...userInfo,
+          profileImage: userInfo.profileImage
+        };
+      });
 
       return teamObj;
     });
@@ -1398,5 +1422,143 @@ exports.debugAuth = async (req, res) => {
   } catch (error) {
     console.error('Debug auth error:', error);
     res.status(500).json({ error: 'Debug failed' });
+  }
+};
+
+// Get join requests for team captain (for notifications)
+exports.getJoinRequests = async (req, res) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Find teams where user is captain
+    const teams = await Team.find({
+      captain: req.user.id,
+      'joinRequests.status': 'pending'
+    }).select('_id name sport joinRequests');
+
+    // Get all pending join requests
+    const allJoinRequests = [];
+    teams.forEach(team => {
+      const pendingRequests = team.joinRequests.filter(req => req.status === 'pending');
+      pendingRequests.forEach(request => {
+        allJoinRequests.push({
+          _id: request._id,
+          teamId: team._id,
+          teamName: team.name,
+          teamSport: team.sport,
+          userId: request.userId,
+          message: request.message,
+          requestedAt: request.requestedAt,
+          status: request.status
+        });
+      });
+    });
+
+    // Fetch user data for all requesting users
+    const userIds = allJoinRequests.map(req => req.userId.toString());
+    const users = await fetchUserData(userIds);
+    const userMap = {};
+    users.forEach(user => {
+      userMap[user._id] = user;
+    });
+
+    // Enrich join requests with user data
+    const enrichedRequests = allJoinRequests.map(request => ({
+      ...request,
+      userInfo: userMap[request.userId.toString()] || {
+        _id: request.userId,
+        fullName: 'Unknown User',
+        email: 'unknown@example.com'
+      }
+    }));
+
+    res.json({
+      message: 'Join requests retrieved successfully',
+      joinRequests: enrichedRequests
+    });
+  } catch (err) {
+    console.error('Error fetching join requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Get user's own pending join requests (teams user has requested to join)
+exports.getUserJoinRequests = async (req, res) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Find teams where user has pending join requests
+    const teams = await Team.find({
+      'joinRequests.userId': req.user.id,
+      'joinRequests.status': 'pending'
+    }).select('_id name sport location logo joinRequests');
+
+    // Extract user's pending requests
+    const userJoinRequests = [];
+    teams.forEach(team => {
+      const userRequest = team.joinRequests.find(request => 
+        request.userId.toString() === req.user.id && request.status === 'pending'
+      );
+      if (userRequest) {
+        userJoinRequests.push({
+          _id: userRequest._id,
+          teamId: team._id,
+          teamName: team.name,
+          teamSport: team.sport,
+          teamLocation: team.location,
+          teamLogo: team.logo,
+          message: userRequest.message,
+          requestedAt: userRequest.requestedAt,
+          status: userRequest.status
+        });
+      }
+    });
+
+    res.json({
+      message: 'User join requests retrieved successfully',
+      joinRequests: userJoinRequests
+    });
+  } catch (err) {
+    console.error('Error fetching user join requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Cancel a join request
+exports.cancelJoinRequest = async (req, res) => {
+  try {
+    const teamId = req.params.id;
+    const userId = req.user.id;
+
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const team = await Team.findById(teamId);
+    if (!team) {
+      return res.status(404).json({ error: 'Team not found' });
+    }
+
+    // Find the user's pending join request
+    const requestIndex = team.joinRequests.findIndex(request => 
+      request.userId.toString() === userId && request.status === 'pending'
+    );
+
+    if (requestIndex === -1) {
+      return res.status(404).json({ error: 'No pending join request found for this team' });
+    }
+
+    // Remove the join request
+    team.joinRequests.splice(requestIndex, 1);
+    await team.save();
+
+    res.json({ message: 'Join request cancelled successfully' });
+  } catch (err) {
+    console.error('Error cancelling join request:', err);
+    res.status(500).json({ error: err.message });
   }
 };
