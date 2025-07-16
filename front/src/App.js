@@ -17,10 +17,13 @@ import CreateTeamPage from "./features/myteam/pages/CreateTeamPage"; // Import t
 import TeamDetailsPage from "./features/myteam/pages/TeamDetailsPage"; // Import team details page
 import TeamsListPage from "./features/myteam/pages/TeamsListPage"; // Import teams list page
 import BrowseTeamsPage from "./features/teams/pages/BrowseTeamsPage"; // Import browse teams page
+import MyBookingsPage from "./features/booking/pages/MyBookingsPage"; // Import booking pages
+import CompanyBookingDashboard from "./features/booking/pages/CompanyBookingDashboard"; // Import company booking dashboard
 import { Navbar } from "./core/layout/Navbar";
 import { Footer } from "./core/layout/Footer";
 import './App.css';
 import CourtManagementPage from "./features/dashboard/components/CourtManagementPage";
+import CourtSchedulePage from "./pages/CourtSchedulePage";
 
 // A simple HomePage component for the main route
 const HomePage = () => (
@@ -81,6 +84,7 @@ function App() {
             <Route path="player-management" element={<PlayerManagement />} />
             <Route path="company-management" element={<CompanyManagement />} />
             <Route path="court-management" element={<CourtManagementPage />} />
+            <Route path="court-schedules" element={<CourtSchedulePage />} />
           </Route>
           <Route path="/courts" element={<>
             <Navbar />
@@ -93,6 +97,20 @@ function App() {
             <Navbar />
             <main className="flex-grow">
               <CourtDetailsPage />
+            </main>
+            <Footer />
+          </>} />
+          <Route path="/my-bookings" element={<>
+            <Navbar />
+            <main className="flex-grow">
+              <MyBookingsPage />
+            </main>
+            <Footer />
+          </>} />
+          <Route path="/company/:companyId/bookings" element={<>
+            <Navbar />
+            <main className="flex-grow">
+              <CompanyBookingDashboard />
             </main>
             <Footer />
           </>} />

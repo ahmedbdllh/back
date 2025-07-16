@@ -101,7 +101,14 @@ const Sidebar = ({ onCollapseChange }) => {
     { name: 'Booking Management', path: '/dashboard/booking-management', icon: <Calendar size={20} strokeWidth={1.5} /> },
     { name: 'Tournament Management', path: '/dashboard/tournament-management', icon: <Trophy size={20} strokeWidth={1.5} /> },
     { name: 'Company Management', path: '/dashboard/company-management', icon: <Building2 size={20} strokeWidth={1.5} /> },
-    { name: 'Court Management', path: '/dashboard/court-management', icon: <Dumbbell size={20} strokeWidth={1.5} /> },
+    {
+      name: 'Court Management',
+      icon: <Dumbbell size={20} strokeWidth={1.5} />,
+      subLinks: [
+        { name: 'Manage Courts', path: '/dashboard/court-management', icon: <Dumbbell size={18} strokeWidth={1.5} /> },
+        { name: 'Court Schedules', path: '/dashboard/court-schedules', icon: <Calendar size={18} strokeWidth={1.5} /> },
+      ],
+    },
     { name: 'Team Management', path: '/dashboard/team-management', icon: <UsersRound size={20} strokeWidth={1.5} /> },
     { name: 'Complaint Management', path: '/dashboard/complaint-management', icon: <MessageSquare size={20} strokeWidth={1.5} /> },
     { name: 'Payment Management', path: '/dashboard/payment-management', icon: <CreditCard size={20} strokeWidth={1.5} /> },
@@ -109,7 +116,7 @@ const Sidebar = ({ onCollapseChange }) => {
 
   const managerSpecificLinks = [
     'Booking Management',
-    'Tournament Management',
+    'Tournament Management', 
     'Payment Management',
     'Company Management',
     'Court Management',

@@ -22,6 +22,7 @@ export const Navbar = () => {
   const navigate = useNavigate();
   const navLinks = [
     { label: "Courts", href: "/courts" },
+    { label: "My Bookings", href: "/my-bookings", authRequired: true },
     { label: "Padel", href: "#padel" },
     { label: "Football", href: "#football" },
     { label: "Basketball", href: "#basketball" },
@@ -235,17 +236,22 @@ export const Navbar = () => {
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-2 lg:space-x-4 xl:space-x-6 flex-1 justify-center min-w-0 mx-4">
-            {navLinks.map((link, index) => (
-              <NavLink
-                key={index}
-                href={link.href}
-                className="relative text-white hover:text-sky-300 transition-colors duration-300 text-xs sm:text-sm font-medium py-2 px-1 lg:px-2 flex-shrink-0
-                after:content-[''] after:absolute after:w-0 after:h-0.5 after:bg-sky-400 after:left-0
-                after:bottom-0 after:transition-all after:duration-300 hover:after:w-full whitespace-nowrap"
-              >
-                {link.label}
-              </NavLink>
-            ))}
+            {navLinks.map((link, index) => {
+              // Only show auth-required links if user is authenticated
+              if (link.authRequired && !isAuthenticated) return null;
+              
+              return (
+                <NavLink
+                  key={index}
+                  href={link.href}
+                  className="relative text-white hover:text-sky-300 transition-colors duration-300 text-xs sm:text-sm font-medium py-2 px-1 lg:px-2 flex-shrink-0
+                  after:content-[''] after:absolute after:w-0 after:h-0.5 after:bg-sky-400 after:left-0
+                  after:bottom-0 after:transition-all after:duration-300 hover:after:w-full whitespace-nowrap"
+                >
+                  {link.label}
+                </NavLink>
+              );
+            })}
           </div>
 
           {/* Auth Buttons */} 
@@ -316,15 +322,17 @@ export const Navbar = () => {
           }}
         >
                       {(userRole === 'Admin' || userRole === 'Manager') && (
-                        <button
-                          onClick={() => {
-                            window.location.href = '/dashboard';
-                            setIsUserDropdownOpen(false);
-                          }}
-                          className="block w-full text-left px-4 py-2 text-sm text-white hover:bg-neutral-700 transition-colors duration-200"
-                        >
-                          Dashboard
-                        </button>
+                        <>
+                          <button
+                            onClick={() => {
+                              window.location.href = '/dashboard';
+                              setIsUserDropdownOpen(false);
+                            }}
+                            className="block w-full text-left px-4 py-2 text-sm text-white hover:bg-neutral-700 transition-colors duration-200"
+                          >
+                            Dashboard
+                          </button>
+                        </>
                       )}
                       {userRole === 'Player' && (
                         <>
@@ -478,16 +486,21 @@ export const Navbar = () => {
         {isMobileMenuOpen && (
           <div className="md:hidden mt-4 animate-slideDown max-w-full">
             <div className="flex flex-col space-y-2 pb-3 border-b border-neutral-700">
-              {navLinks.map((link, index) => (
-                <NavLink
-                  key={index}
-                  href={link.href}
-                  className="block px-3 py-2 rounded-md hover:bg-neutral-700 text-white transition-colors duration-200"
-                  onClick={() => setIsMobileMenuOpen(false)} // Close dropdown on link click
-                >
-                  {link.label}
-                </NavLink>
-              ))}
+              {navLinks.map((link, index) => {
+                // Only show auth-required links if user is authenticated
+                if (link.authRequired && !isAuthenticated) return null;
+                
+                return (
+                  <NavLink
+                    key={index}
+                    href={link.href}
+                    className="block px-3 py-2 rounded-md hover:bg-neutral-700 text-white transition-colors duration-200"
+                    onClick={() => setIsMobileMenuOpen(false)} // Close dropdown on link click
+                  >
+                    {link.label}
+                  </NavLink>
+                );
+              })}
             </div>
             <div className="flex flex-col space-y-3 pt-3">
               {isAuthenticated ? (

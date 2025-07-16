@@ -4,6 +4,7 @@ import { MapPin, Users, Clock, Star, Building2, Search, ChevronDown } from 'luci
 import { useNavigate } from 'react-router-dom';
 import { getCourts } from '../../../../court/services/courtService';
 import { Container } from '../../../../../shared/ui/components/Container';
+import BookingCalendar from '../../../../booking/components/BookingCalendar';
 
 export default function CourtsPage() {
   const navigate = useNavigate();
@@ -13,6 +14,8 @@ export default function CourtsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState('all');
   const [selectedCity, setSelectedCity] = useState('all');
+  const [bookingCalendarOpen, setBookingCalendarOpen] = useState(false);
+  const [selectedCourt, setSelectedCourt] = useState(null);
 
   useEffect(() => {
     fetchCourts();
@@ -60,6 +63,18 @@ export default function CourtsPage() {
     paddle: 'from-blue-500 to-cyan-600',
     basketball: 'from-orange-500 to-red-600',
     tennis: 'from-purple-500 to-indigo-600'
+  };
+
+  const handleBookCourt = (court) => {
+    setSelectedCourt(court);
+    setBookingCalendarOpen(true);
+  };
+
+  const handleBookingComplete = (booking) => {
+    // Handle successful booking
+    console.log('Booking completed:', booking);
+    // You could show a success message or redirect
+    alert('Booking created successfully! You will receive a confirmation email.');
   };
 
   if (loading) {
@@ -333,8 +348,7 @@ export default function CourtsPage() {
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Future booking functionality
-                          console.log('Book court:', court._id);
+                          handleBookCourt(court);
                         }}
                         className="px-4 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-medium rounded-xl hover:from-green-500 hover:to-green-400 transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500/50"
                       >
@@ -348,6 +362,17 @@ export default function CourtsPage() {
           )}
         </AnimatePresence>
       </Container>
+
+      {/* Booking Calendar Modal */}
+      <BookingCalendar
+        court={selectedCourt}
+        isOpen={bookingCalendarOpen}
+        onClose={() => {
+          setBookingCalendarOpen(false);
+          setSelectedCourt(null);
+        }}
+        onBookingComplete={handleBookingComplete}
+      />
     </div>
   );
 }
