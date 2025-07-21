@@ -248,10 +248,7 @@ const MyBookingsPage = () => {
                         </div>
                       </div>
                       
-                      <div className="flex items-center justify-between mt-3">
-                        <span className="text-lg font-semibold text-green-400">
-                          ${booking.totalPrice}
-                        </span>
+                      <div className="flex items-center justify-end mt-3">
                         <span className="text-sm text-white/60">
                           {booking.duration} minutes
                         </span>
@@ -381,7 +378,6 @@ const MyBookingsPage = () => {
                     <div>
                       <h3 className="text-lg font-semibold text-white mb-2">Payment</h3>
                       <div className="space-y-2 text-white/80">
-                        <p><strong>Total Price:</strong> <span className="text-green-400">${selectedBooking.totalPrice}</span></p>
                         <p><strong>Payment Status:</strong> {selectedBooking.paymentStatus}</p>
                         <p><strong>Payment Method:</strong> {selectedBooking.paymentMethod}</p>
                       </div>

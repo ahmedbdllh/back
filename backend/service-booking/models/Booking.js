@@ -100,10 +100,8 @@ const bookingSchema = new mongoose.Schema({
   },
   // Court and company details (cached for faster queries)
   courtDetails: {
-    name: String,
-    type: String,
-    address: String,
-    city: String
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   companyDetails: {
     companyName: String,
@@ -176,28 +174,53 @@ bookingSchema.methods.hasConflict = async function(courtId, date, startTime, end
 };
 
 // Static method to get available time slots for a court on a specific date
-bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingHours = { start: '08:00', end: '22:00' }) {
+bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingHours = { start: '04:00', end: '23:30' }, courtMatchTime = 90) {
   const existingBookings = await this.find({
     courtId: courtId,
     date: date,
     status: { $in: ['pending', 'confirmed'] }
   }).sort({ startTime: 1 });
 
-  // Generate all possible time slots (30-minute intervals)
+  // Generate all possible time slots using the court's match time duration
   const slots = [];
   let currentHour = parseInt(workingHours.start.split(':')[0]);
   let currentMinute = parseInt(workingHours.start.split(':')[1]);
   const endHour = parseInt(workingHours.end.split(':')[0]);
   const endMinute = parseInt(workingHours.end.split(':')[1]);
 
-  while (currentHour < endHour || (currentHour === endHour && currentMinute < endMinute)) {
+  while (currentHour < endHour || (currentHour === endHour && currentMinute <= endMinute)) {
     const timeSlot = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
-    slots.push(timeSlot);
     
-    currentMinute += 30;
-    if (currentMinute >= 60) {
-      currentMinute = 0;
-      currentHour++;
+    // Calculate the end time for this slot to check if it fits within working hours
+    let slotEndHour = currentHour;
+    let slotEndMinute = currentMinute + courtMatchTime; // Use court's match time instead of hardcoded 90
+    
+    while (slotEndMinute >= 60) {
+      slotEndHour += 1;
+      slotEndMinute -= 60;
+    }
+    
+    // Only add slot if it ends within working hours
+    if (slotEndHour < endHour || (slotEndHour === endHour && slotEndMinute <= endMinute)) {
+      slots.push(timeSlot);
+    } else {
+      break; // Stop if next slot would exceed working hours
+    }
+    
+    currentMinute += courtMatchTime; // Use court's match time for intervals
+    while (currentMinute >= 60) {
+      currentHour += 1;
+      currentMinute -= 60;
+    }
+    
+    // Break if we've exceeded the end time
+    if (currentHour > endHour || (currentHour === endHour && currentMinute > endMinute)) {
+      break;
+    }
+    
+    // Prevent infinite loop
+    if (currentHour >= 24) {
+      break;
     }
   }
 
@@ -210,5 +233,13 @@ bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingH
 
   return availableSlots;
 };
+
+// Clear any existing model to avoid caching issues
+if (mongoose.models.Booking) {
+  delete mongoose.models.Booking;
+}
+if (mongoose.modelSchemas && mongoose.modelSchemas.Booking) {
+  delete mongoose.modelSchemas.Booking;
+}
 
 module.exports = mongoose.model('Booking', bookingSchema);

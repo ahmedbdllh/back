@@ -17,9 +17,9 @@ const TeamBookingPage = () => {
   const [success, setSuccess] = useState('');
   const [bookingData, setBookingData] = useState({
     startTime: '',
-    duration: 60,
     notes: ''
   });
+  const [courtDuration, setCourtDuration] = useState(90); // Will be set from court config
 
   useEffect(() => {
     loadInitialData();
@@ -57,8 +57,23 @@ const TeamBookingPage = () => {
   const loadAvailableSlots = async () => {
     try {
       setLoading(true);
-      const data = await teamBookingService.getAvailableSlots(selectedCourt, selectedDate, token);
-      setAvailableSlots(data.availableSlots || []);
+      const response = await fetch(`${process.env.REACT_APP_BOOKING_API_URL || 'http://localhost:5005'}/api/team-bookings/available-slots/${selectedCourt}?date=${selectedDate}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setAvailableSlots(data.availableSlots || []);
+        // Set the court's fixed duration
+        if (data.matchDuration) {
+          setCourtDuration(data.matchDuration);
+        }
+      } else {
+        setError(data.message || 'Failed to load available slots');
+      }
     } catch (err) {
       console.error('Error loading slots:', err);
       setError('Failed to load available slots');
@@ -84,13 +99,12 @@ const TeamBookingPage = () => {
         teamId: userTeam._id,
         date: selectedDate,
         startTime: bookingData.startTime,
-        duration: bookingData.duration,
         notes: bookingData.notes
       }, token);
       
       if (data.success) {
         setSuccess(`Team booking created successfully! Booking ID: ${data.booking.id}`);
-        setBookingData({ startTime: '', duration: 60, notes: '' });
+        setBookingData({ startTime: '', notes: '' });
         loadAvailableSlots(); // Refresh available slots
       } else {
         setError(data.message || 'Failed to create booking');
@@ -106,15 +120,6 @@ const TeamBookingPage = () => {
   const getSelectedCourtName = () => {
     const court = courts.find(c => c._id === selectedCourt);
     return court ? court.name : 'Select a court';
-  };
-
-  const getDurationPrice = (duration) => {
-    const slot = availableSlots.find(s => s.time === bookingData.startTime);
-    if (slot) {
-      const durationOption = slot.availableDurations.find(d => d.duration === duration);
-      return durationOption ? durationOption.price : 0;
-    }
-    return 0;
   };
 
   if (loading && !userTeam) {
@@ -228,33 +233,21 @@ const TeamBookingPage = () => {
                 </div>
               )}
 
-              {/* Duration Selection */}
+              {/* Duration Display (Read-only - set by manager) */}
               {bookingData.startTime && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">
-                    Duration *
+                    Match Duration (Set by Manager)
                   </label>
-                  <div className="mt-2 space-y-2">
-                    {availableSlots
-                      .find(s => s.time === bookingData.startTime)
-                      ?.availableDurations.map(duration => (
-                        <label key={duration.duration} className="flex items-center">
-                          <input
-                            type="radio"
-                            name="duration"
-                            value={duration.duration}
-                            checked={bookingData.duration === duration.duration}
-                            onChange={(e) => setBookingData(prev => ({ 
-                              ...prev, 
-                              duration: parseInt(e.target.value) 
-                            }))}
-                            className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
-                          />
-                          <span className="ml-3 text-sm">
-                            {duration.durationLabel} - {duration.priceLabel}
-                          </span>
-                        </label>
-                      ))}
+                  <div className="mt-2 p-3 bg-gray-50 rounded-lg border">
+                    <div className="flex items-center">
+                      <span className="text-sm font-medium text-gray-900">
+                        {courtDuration} minutes ({(courtDuration/60).toFixed(1)}h)
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Duration is fixed by the court manager and cannot be modified
+                    </p>
                   </div>
                 </div>
               )}
@@ -296,13 +289,7 @@ const TeamBookingPage = () => {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Duration:</span>
-                      <span className="font-medium">{bookingData.duration} minutes</span>
-                    </div>
-                    <div className="flex justify-between border-t pt-2 mt-2">
-                      <span className="text-gray-900 font-medium">Total Price:</span>
-                      <span className="text-lg font-bold text-blue-600">
-                        {getDurationPrice(bookingData.duration)} DT
-                      </span>
+                      <span className="font-medium">{courtDuration} minutes</span>
                     </div>
                   </div>
                 </div>

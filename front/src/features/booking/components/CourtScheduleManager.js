@@ -12,7 +12,7 @@ import {
   Plus,
   Trash2
 } from 'lucide-react';
-import { scheduleService } from '../services/scheduleService';
+import { updateCourt } from '../../court/services/courtService';
 
 const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
   const [loading, setLoading] = useState(false);
@@ -22,19 +22,18 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
   
   const [schedule, setSchedule] = useState({
     workingHours: {
-      monday: { isOpen: true, start: '08:00', end: '22:00' },
-      tuesday: { isOpen: true, start: '08:00', end: '22:00' },
-      wednesday: { isOpen: true, start: '08:00', end: '22:00' },
-      thursday: { isOpen: true, start: '08:00', end: '22:00' },
-      friday: { isOpen: true, start: '08:00', end: '22:00' },
-      saturday: { isOpen: true, start: '08:00', end: '22:00' },
-      sunday: { isOpen: true, start: '08:00', end: '22:00' }
+      monday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      tuesday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      wednesday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      thursday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      friday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      saturday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' },
+      sunday: { isOpen: true, start: '08:00 AM', end: '10:00 PM' }
     },
     pricing: {
-      pricePerHour: 15, // Price per hour in dinars
+      pricePerMatch: 15, // Price per match in dinars
       advanceBookingPrice: 200, // Price for advance booking in dinars
-      availableMatchDurations: [60, 90, 120], // Available match durations in minutes
-      defaultMatchDuration: 90 // Default match duration (1.5 hours)
+      matchDuration: 90 // Match duration from court settings (1.5 hours)
     },
     advanceBookingDays: 30,
     cancellationPolicy: {
@@ -56,21 +55,115 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
 
   useEffect(() => {
     if (isOpen && court) {
-      fetchSchedule();
+      initializeSchedule();
     }
   }, [isOpen, court]);
 
-  const fetchSchedule = async () => {
+  // Helper function to convert 24-hour to 12-hour format
+  const convertTo12Hour = (time24) => {
+    if (!time24) return '08:00 AM';
+    const [hours, minutes] = time24.split(':');
+    const hour = parseInt(hours);
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return `${hour12.toString().padStart(2, '0')}:${minutes} ${period}`;
+  };
+
+  // Helper function to convert 12-hour to 24-hour format
+  const convertTo24Hour = (time12) => {
+    if (!time12) return '08:00';
+    const [time, period] = time12.split(' ');
+    const [hours, minutes] = time.split(':');
+    let hour = parseInt(hours);
+    
+    if (period === 'PM' && hour !== 12) hour += 12;
+    if (period === 'AM' && hour === 12) hour = 0;
+    
+    return `${hour.toString().padStart(2, '0')}:${minutes}`;
+  };
+
+  // Generate time options in 12-hour format
+  const generateTimeOptions = () => {
+    const times = [];
+    for (let hour = 0; hour < 24; hour++) {
+      for (let minute = 0; minute < 60; minute += 30) {
+        const time24 = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        const time12 = convertTo12Hour(time24);
+        times.push(time12);
+      }
+    }
+    return times;
+  };
+
+  const initializeSchedule = () => {
     try {
       setLoading(true);
-      const response = await scheduleService.getCourtSchedule(court._id);
-      if (response.success && response.data.schedule) {
-        setSchedule({ ...schedule, ...response.data.schedule });
+      
+      // Check if court has saved schedule data
+      const savedSchedule = court?.schedule;
+      
+      let initialSchedule;
+      
+      if (savedSchedule && savedSchedule.workingHours) {
+        // Use saved schedule with 12-hour format conversion
+        initialSchedule = {
+          workingHours: Object.keys(savedSchedule.workingHours).reduce((acc, day) => {
+            const daySchedule = savedSchedule.workingHours[day];
+            acc[day] = {
+              isOpen: daySchedule.isOpen,
+              start: convertTo12Hour(daySchedule.start),
+              end: convertTo12Hour(daySchedule.end)
+            };
+            return acc;
+          }, {}),
+          pricing: {
+            pricePerMatch: savedSchedule.pricing?.pricePerMatch || court.pricePerHour || 15,
+            advanceBookingPrice: savedSchedule.pricing?.advanceBookingPrice || 200,
+            matchDuration: savedSchedule.pricing?.matchDuration || court.matchTime || 90
+          },
+          advanceBookingDays: savedSchedule.advanceBookingDays || 30,
+          cancellationPolicy: savedSchedule.cancellationPolicy || {
+            allowCancellation: true,
+            cancellationDeadlineHours: 24,
+            refundPercentage: 80
+          },
+          blockedDates: savedSchedule.blockedDates || []
+        };
+      } else {
+        // Initialize with court's basic data or defaults
+        const defaultStart = convertTo12Hour(court.openingTime || '08:00');
+        const defaultEnd = convertTo12Hour(court.closingTime || '22:00');
+        
+        initialSchedule = {
+          workingHours: {
+            monday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            tuesday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            wednesday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            thursday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            friday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            saturday: { isOpen: true, start: defaultStart, end: defaultEnd },
+            sunday: { isOpen: true, start: defaultStart, end: defaultEnd }
+          },
+          pricing: {
+            pricePerMatch: court.pricePerHour || 15,
+            advanceBookingPrice: 200,
+            matchDuration: court.matchTime || 90
+          },
+          advanceBookingDays: 30,
+          cancellationPolicy: {
+            allowCancellation: true,
+            cancellationDeadlineHours: 24,
+            refundPercentage: 80
+          },
+          blockedDates: []
+        };
       }
+      
+      setSchedule(initialSchedule);
       setError(null);
     } catch (err) {
-      setError('Failed to load court schedule');
-      console.error('Schedule fetch error:', err);
+      setError('Failed to initialize court schedule');
+      console.error('Schedule initialization error:', err);
     } finally {
       setLoading(false);
     }
@@ -99,26 +192,6 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
     }));
   };
 
-  const addMatchDuration = (duration) => {
-    setSchedule(prev => ({
-      ...prev,
-      pricing: {
-        ...prev.pricing,
-        availableMatchDurations: [...prev.pricing.availableMatchDurations, duration].sort((a, b) => a - b)
-      }
-    }));
-  };
-
-  const removeMatchDuration = (duration) => {
-    setSchedule(prev => ({
-      ...prev,
-      pricing: {
-        ...prev.pricing,
-        availableMatchDurations: prev.pricing.availableMatchDurations.filter(d => d !== duration)
-      }
-    }));
-  };
-
   const addBlockedDate = () => {
     if (newBlockedDate.date && newBlockedDate.reason) {
       setSchedule(prev => ({
@@ -142,11 +215,35 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
   const handleSave = async () => {
     try {
       setSaving(true);
-      const response = await scheduleService.updateCourtSchedule(court._id, schedule);
       
-      if (response.success) {
+      // Convert 12-hour format back to 24-hour format for saving
+      const scheduleData = {
+        workingHours: Object.keys(schedule.workingHours).reduce((acc, day) => {
+          acc[day] = {
+            ...schedule.workingHours[day],
+            start: convertTo24Hour(schedule.workingHours[day].start),
+            end: convertTo24Hour(schedule.workingHours[day].end)
+          };
+          return acc;
+        }, {}),
+        pricing: schedule.pricing,
+        advanceBookingDays: schedule.advanceBookingDays,
+        cancellationPolicy: schedule.cancellationPolicy,
+        blockedDates: schedule.blockedDates
+      };
+
+      const updatedCourtData = {
+        pricePerHour: schedule.pricing.pricePerMatch,
+        openingTime: convertTo24Hour(schedule.workingHours.monday.start), // Keep for backward compatibility
+        closingTime: convertTo24Hour(schedule.workingHours.monday.end), // Keep for backward compatibility
+        schedule: scheduleData // Save the complete schedule
+      };
+      
+      const response = await updateCourt(court._id, updatedCourtData);
+      
+      if (response && response.data) {
         setSuccess('Court schedule updated successfully');
-        onSave && onSave(response.data.schedule);
+        onSave && onSave(response.data);
         setTimeout(() => {
           setSuccess(null);
           onClose();
@@ -238,19 +335,25 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
                       </div>
                       {schedule.workingHours[day].isOpen && (
                         <div className="flex space-x-2">
-                          <input
-                            type="time"
+                          <select
                             value={schedule.workingHours[day].start}
                             onChange={(e) => handleWorkingHoursChange(day, 'start', e.target.value)}
                             className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                          />
+                          >
+                            {generateTimeOptions().map(time => (
+                              <option key={time} value={time} className="bg-gray-900">{time}</option>
+                            ))}
+                          </select>
                           <span className="text-white/60 py-2">to</span>
-                          <input
-                            type="time"
+                          <select
                             value={schedule.workingHours[day].end}
                             onChange={(e) => handleWorkingHoursChange(day, 'end', e.target.value)}
                             className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                          />
+                          >
+                            {generateTimeOptions().map(time => (
+                              <option key={time} value={time} className="bg-gray-900">{time}</option>
+                            ))}
+                          </select>
                         </div>
                       )}
                     </div>
@@ -290,16 +393,16 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="bg-white/5 rounded-lg p-4">
                     <label className="block text-sm font-medium text-white mb-2">
-                      Price per Hour (Dinars)
+                      Price per Match (Dinars)
                     </label>
                     <input
                       type="number"
-                      value={schedule.pricing.pricePerHour}
-                      onChange={(e) => handlePricingChange('pricePerHour', parseFloat(e.target.value))}
+                      value={schedule.pricing.pricePerMatch}
+                      onChange={(e) => handlePricingChange('pricePerMatch', parseFloat(e.target.value))}
                       className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                       placeholder="15"
                     />
-                    <p className="text-white/60 text-xs mt-1">Base price per hour for court booking</p>
+                    <p className="text-white/60 text-xs mt-1">Fixed price per match regardless of duration</p>
                   </div>
                   
                   <div className="bg-white/5 rounded-lg p-4">
@@ -317,69 +420,26 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
                   </div>
                 </div>
 
-                {/* Match Duration Settings */}
+                {/* Match Duration Display */}
                 <div className="bg-white/5 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-lg font-medium text-white">Available Match Durations</h4>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const duration = parseInt(e.target.value);
-                        if (duration && !schedule.pricing.availableMatchDurations.includes(duration)) {
-                          addMatchDuration(duration);
-                        }
-                      }}
-                      className="px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                    >
-                      <option value="" className="bg-gray-900">Add Duration</option>
-                      <option value={30} className="bg-gray-900">30 minutes</option>
-                      <option value={60} className="bg-gray-900">1 hour</option>
-                      <option value={90} className="bg-gray-900">1.5 hours</option>
-                      <option value={120} className="bg-gray-900">2 hours</option>
-                      <option value={150} className="bg-gray-900">2.5 hours</option>
-                      <option value={180} className="bg-gray-900">3 hours</option>
-                    </select>
-                  </div>
+                  <h4 className="text-lg font-medium text-white mb-4">Match Duration</h4>
                   
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {schedule.pricing.availableMatchDurations.map((duration) => {
-                        const hours = duration / 60;
-                        const price = (schedule.pricing.pricePerHour * hours).toFixed(1);
-                        return (
-                          <div key={duration} className="bg-white/10 rounded-lg p-3 flex items-center justify-between">
-                            <div className="text-white">
-                              <div className="font-medium">{hours}h</div>
-                              <div className="text-xs text-white/60">{price} DT</div>
-                            </div>
-                            <button
-                              onClick={() => removeMatchDuration(duration)}
-                              className="p-1 text-red-400 hover:bg-red-500/20 rounded transition-colors"
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                        );
-                      })}
+                  <div className="flex items-center justify-between bg-white/10 rounded-lg p-4">
+                    <div className="text-white">
+                      <div className="text-lg font-semibold">
+                        {schedule.pricing.matchDuration / 60}h ({schedule.pricing.matchDuration} minutes)
+                      </div>
+                      <div className="text-sm text-white/60 mt-1">
+                        Price: {schedule.pricing.pricePerMatch} DT per match
+                      </div>
+                    </div>
+                    <div className="text-white/40 text-sm">
+                      Set by court configuration
                     </div>
                   </div>
-
-                  <div className="mt-4">
-                    <label className="block text-sm font-medium text-white mb-2">
-                      Default Match Duration
-                    </label>
-                    <select
-                      value={schedule.pricing.defaultMatchDuration}
-                      onChange={(e) => handlePricingChange('defaultMatchDuration', parseInt(e.target.value))}
-                      className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                    >
-                      {schedule.pricing.availableMatchDurations.map((duration) => (
-                        <option key={duration} value={duration} className="bg-gray-900">
-                          {duration / 60}h ({(schedule.pricing.pricePerHour * duration / 60).toFixed(1)} DT)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <p className="text-white/60 text-xs mt-2">
+                    Match duration is configured in the court settings and cannot be changed here.
+                  </p>
                 </div>
               </div>
 

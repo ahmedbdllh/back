@@ -77,41 +77,4 @@ router.get('/my-team', auth, async (req, res) => {
     }
 });
 
-// @route   GET api/teams/:teamId
-// @desc    Get team by ID
-// @access  Private
-router.get('/:teamId', auth, async (req, res) => {
-    try {
-        const team = await Team.findById(req.params.teamId).populate({
-            path: 'members captain',
-            select: 'fullName email phoneNumber profileImage'
-        });
-        
-        if (!team) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Team not found' 
-            });
-        }
-
-        res.json({
-            success: true,
-            team: {
-                _id: team._id,
-                teamName: team.name,
-                captain: team.captain,
-                members: team.members,
-                joinCode: team.joinCode,
-                createdAt: team.createdAt
-            }
-        });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server Error' 
-        });
-    }
-});
-
 module.exports = router;

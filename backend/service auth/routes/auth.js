@@ -2009,6 +2009,46 @@ router.get('/profile', auth, async (req, res) => {
   }
 });
 
+// @route   GET /api/auth/verify
+// @desc    Verify user token and return user info
+// @access  Private
+router.get('/verify', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        _id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        phoneNumber: user.phoneNumber,
+        preferredSports: user.preferredSports,
+        position: user.position,
+        companyName: user.companyName,
+        cin: user.cin,
+        profileImage: user.profileImage,
+        isVerified: user.isVerified,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error('User verification error:', err);
+    res.status(401).json({
+      success: false,
+      message: 'User verification failed.'
+    });
+  }
+});
+
 // @route   PUT /api/auth/profile
 // @desc    Update user profile
 // @access  Private
@@ -2113,75 +2153,6 @@ router.post('/users/bulk', async (req, res) => {
     res.status(500).json({
       success: false,
       msg: 'Server error'
-    });
-  }
-});
-
-// @route   GET /api/auth/verify
-// @desc    Verify JWT token and return user info for inter-service communication
-// @access  Private (requires valid JWT token)
-router.get('/verify', async (req, res) => {
-  try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'Access denied. No token provided.'
-      });
-    }
-
-    // Verify token
-    const JWT_SECRET = process.env.JWT_SECRET || '7d2260dd33822b6d8c53b068ded2719aa13cfdd279ff0f114da3c4b063e61708';
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get user from database
-    const user = await User.findById(decoded.id).select('-password -twoFactorSecret -twoFactorRecoveryCodes');
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found.'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      user: {
-        userId: user._id.toString(),
-        id: user._id.toString(),
-        _id: user._id,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        isVerified: user.isVerified,
-        profileImage: user.profileImage ? `/uploads/${user.profileImage.split('/').pop()}` : null,
-        phoneNumber: user.phoneNumber,
-        cin: user.cin,
-        companyName: user.companyName
-      }
-    });
-
-  } catch (error) {
-    console.error('Token verification error:', error);
-    
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token.'
-      });
-    }
-    
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired.'
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Server error during token verification.'
     });
   }
 });

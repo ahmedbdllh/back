@@ -36,7 +36,12 @@ const verifyUser = async (req, res, next) => {
     });
 
     if (response.data.success) {
-      req.user = { ...req.user, ...response.data.user };
+      // Ensure userId is set from the user data
+      req.user = { 
+        ...req.user, 
+        ...response.data.user,
+        userId: response.data.user.id || response.data.user._id
+      };
       next();
     } else {
       return res.status(401).json({

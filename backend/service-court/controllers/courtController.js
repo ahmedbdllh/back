@@ -162,6 +162,76 @@ exports.getCourtsByCompany = async (req, res) => {
   }
 };
 
+exports.getCourtsByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log('=== getCourtsByUser called ===');
+    console.log('Getting courts for user ID:', userId);
+    
+    // Get the user's details from the auth service
+    try {
+      const userResponse = await axios.get(`http://localhost:5000/api/auth/user/${userId}`, {
+        headers: {
+          'Authorization': req.headers.authorization
+        }
+      });
+      
+      const user = userResponse.data.user || userResponse.data;
+      console.log('User found:', { 
+        id: user._id || user.id, 
+        fullName: user.fullName, 
+        companyName: user.companyName,
+        role: user.role 
+      });
+      
+      if (!user.companyName) {
+        console.log('User has no company name');
+        return res.json([]);
+      }
+      
+      // Find the company by the user's companyName
+      const companyResponse = await axios.get(`http://localhost:5001/api/companies`, {
+        headers: {
+          'Authorization': req.headers.authorization
+        }
+      });
+      
+      const companies = companyResponse.data;
+      console.log('All companies count:', companies.length);
+      
+      // Find the exact company that matches the user's companyName
+      const userCompany = companies.find(company => 
+        company.companyName && 
+        company.companyName.toLowerCase().trim() === user.companyName.toLowerCase().trim()
+      );
+      
+      if (!userCompany) {
+        console.log('No company found with name:', user.companyName);
+        return res.json([]);
+      }
+      
+      console.log('User company found:', { 
+        id: userCompany._id, 
+        name: userCompany.companyName 
+      });
+      
+      // Get courts belonging to this specific company
+      const courts = await Court.find({ companyId: userCompany._id });
+      console.log('Courts found for company:', courts.length);
+      
+      res.json(courts);
+      
+    } catch (error) {
+      console.error('Error in user/company lookup:', error.message);
+      return res.status(400).json({ error: 'Unable to fetch user or company details' });
+    }
+    
+  } catch (err) {
+    console.error('Error in getCourtsByUser:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getCourtById = async (req, res) => {
   try {
     const court = await Court.findById(req.params.id);

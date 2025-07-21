@@ -58,7 +58,17 @@ export const updateCourt = (id, data) => {
 };
 
 export const getCourts = () => axios.get(API_URL);
+export const getAllCourts = async () => {
+  try {
+    const response = await axios.get(API_URL);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching courts:', error);
+    throw error;
+  }
+};
 export const getCourtsByCompany = (companyId) => axios.get(`${API_URL}/company/${companyId}`, getAuthHeaders());
+export const getCourtsByUser = (userId) => axios.get(`${API_URL}/user/${userId}`, getAuthHeaders());
 export const getCourtById = (id) => axios.get(`${API_URL}/${id}`);
 export const deleteCourt = (id) => axios.delete(`${API_URL}/${id}`, getAuthHeaders());
 
@@ -117,3 +127,21 @@ export const deleteRating = (courtId, ratingId) => {
 };
 
 export const getCourtRatings = (courtId) => axios.get(`${API_URL}/${courtId}/ratings`);
+
+// Create courtService object for compatibility
+export const courtService = {
+  createCourt,
+  updateCourt,
+  getCourts,
+  getAllCourts,
+  getCourtsByCompany,
+  getCourtsByUser,
+  getCourtById,
+  deleteCourt,
+  addRating,
+  updateRating,
+  deleteRating,
+  getCourtRatings
+};
+
+export default courtService;

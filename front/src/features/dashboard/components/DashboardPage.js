@@ -26,8 +26,6 @@ const Dashboard = () => {
       return 'Booking Management';
     } else if (path.includes('/tournament-management')) {
       return 'Tournament Management';
-    } else if (path.includes('/court-schedules')) {
-      return 'Court Schedules';
     } else if (path.includes('/court-management')) {
       return 'Court Management';
     } else if (path.includes('/team-management')) {

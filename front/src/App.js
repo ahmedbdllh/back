@@ -10,6 +10,7 @@ import UserManagement from "./features/admin/components/management/UserManagemen
 import ManagerManagement from "./features/admin/components/management/ManagerManagement";
 import PlayerManagement from "./features/admin/components/management/PlayerManagement";
 import CompanyManagement from "./features/admin/components/company/CompanyManagement";
+import BookingManagement from "./pages/CourtManagementDashboard";
 import AdminSignInPage from "./features/admin/components/AdminSignInPage";
 import { CourtsPage, CourtDetailsPage } from "./features/home/components/court";
 import MyTeam from "./features/myteam/MyTeamSimple"; // Import the simplified MyTeam component
@@ -83,6 +84,7 @@ function App() {
             <Route path="manager-management" element={<ManagerManagement />} />
             <Route path="player-management" element={<PlayerManagement />} />
             <Route path="company-management" element={<CompanyManagement />} />
+            <Route path="booking-management" element={<BookingManagement />} />
             <Route path="court-management" element={<CourtManagementPage />} />
             <Route path="court-schedules" element={<CourtSchedulePage />} />
           </Route>

@@ -15,38 +15,38 @@ const calendarConfigSchema = new mongoose.Schema({
   workingHours: {
     monday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     tuesday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     wednesday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     thursday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     friday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     saturday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     },
     sunday: {
       isOpen: { type: Boolean, default: true },
-      start: { type: String, default: '08:00' },
-      end: { type: String, default: '22:00' }
+      start: { type: String, default: '04:00' },
+      end: { type: String, default: '23:30' }
     }
   },
   pricing: {
@@ -65,12 +65,12 @@ const calendarConfigSchema = new mongoose.Schema({
   },
   slotDuration: {
     type: Number,
-    default: 30, // Duration in minutes for each booking slot
+    default: 90, // Duration in minutes for each booking slot (changed to 90 for paddle courts)
     enum: [15, 30, 45, 60, 90, 120]
   },
   minBookingDuration: {
     type: Number,
-    default: 60, // Minimum booking duration in minutes
+    default: 90, // Minimum booking duration in minutes (changed to 90 for paddle courts)
     min: 30
   },
   maxBookingDuration: {

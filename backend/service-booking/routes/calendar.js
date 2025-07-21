@@ -115,7 +115,7 @@ router.get('/:courtId', async (req, res) => {
       // Generate available slots
       let availableSlots = [];
       if (workingHours && workingHours.isOpen && !isBlocked && !isPast) {
-        availableSlots = await Booking.getAvailableSlots(courtId, currentDate, workingHours);
+        availableSlots = await Booking.getAvailableSlots(courtId, currentDate, workingHours, court.matchTime);
       }
 
       calendar.push({
@@ -208,6 +208,17 @@ router.get('/:courtId/available-slots', async (req, res) => {
       });
     }
 
+    // Get court details to access match time
+    const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+    const court = courtResponse.data;
+    
+    if (!court || !court._id) {
+      return res.status(404).json({
+        success: false,
+        message: 'Court not found'
+      });
+    }
+
     // Check if date is blocked
     if (calendarConfig.isDateBlocked(targetDate)) {
       return res.json({
@@ -229,17 +240,22 @@ router.get('/:courtId/available-slots', async (req, res) => {
       });
     }
 
-    // Get available slots
-    const availableSlots = await Booking.getAvailableSlots(courtId, targetDate, workingHours);
+    // Get available slots using court's match time
+    const availableSlots = await Booking.getAvailableSlots(courtId, targetDate, workingHours, court.matchTime);
 
-    // Calculate price for each slot (assuming 1-hour duration for display)
+    // Calculate price for each slot using court's match duration
+    const matchDuration = court.matchTime;
     const slotsWithPricing = availableSlots.map(slot => {
-      const endTime = moment(slot, 'HH:mm').add(1, 'hour').format('HH:mm');
+      const startMoment = moment(slot, 'HH:mm');
+      const endMoment = startMoment.clone().add(matchDuration, 'minutes');
+      const endTime = endMoment.format('HH:mm');
       const price = calendarConfig.calculatePrice(targetDate, slot, endTime);
       
       return {
         startTime: slot,
         endTime,
+        duration: matchDuration,
+        durationLabel: `${matchDuration}min`,
         price: price,
         pricePerHour: calendarConfig.pricing.basePrice
       };

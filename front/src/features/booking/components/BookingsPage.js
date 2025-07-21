@@ -5,7 +5,6 @@ import {
   Clock, 
   MapPin, 
   Users, 
-  CreditCard,
   Filter,
   Search,
   CheckCircle,
@@ -266,12 +265,8 @@ const BookingsPage = () => {
                         </div>
                       </div>
 
-                      {/* Price and Company */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center text-green-400">
-                          <CreditCard size={16} className="mr-2" />
-                          <span className="font-semibold">${booking.totalPrice}</span>
-                        </div>
+                      {/* Company Info */}
+                      <div className="flex items-center justify-end">
                         <div className="text-white/60 text-sm">
                           {booking.companyDetails?.companyName}
                         </div>

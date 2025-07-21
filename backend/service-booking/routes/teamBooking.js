@@ -5,11 +5,13 @@ const axios = require('axios');
 const Booking = require('../models/Booking');
 const CalendarConfig = require('../models/CalendarConfig');
 const { verifyToken, verifyUser } = require('../middleware/auth');
+const { sendBookingConfirmation } = require('../services/emailService');
 
 // Service URLs
 const COURT_SERVICE_URL = process.env.COURT_SERVICE_URL || 'http://localhost:5003';
 const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://localhost:5001';
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5000';
+const TEAM_SERVICE_URL = process.env.TEAM_SERVICE_URL || 'http://localhost:5004';
 
 // @route   POST /api/team-bookings
 // @desc    Create a new team booking (only team captains can book)
@@ -21,34 +23,71 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       teamId,
       date,
       startTime,
-      duration,
       notes
     } = req.body;
 
-    // Validate required fields
-    if (!courtId || !teamId || !date || !startTime || !duration) {
+    console.log('🔍 Booking request debugging:');
+    console.log('  - req.body:', JSON.stringify(req.body, null, 2));
+    console.log('  - courtId:', courtId);
+    console.log('  - teamId:', teamId);
+    console.log('  - date:', date);
+    console.log('  - startTime:', startTime);
+    console.log('  - req.user:', JSON.stringify(req.user, null, 2));
+    console.log('  - teamId:', teamId);
+    console.log('  - date:', date);
+    console.log('  - startTime:', startTime);
+
+    // Validate required fields - duration is no longer required as it comes from court config
+    if (!courtId || !teamId || !date || !startTime) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: courtId, teamId, date, startTime, duration'
+        message: 'Missing required fields: courtId, teamId, date, startTime'
       });
     }
 
     // Verify that the user is the captain of the team
     try {
-      const teamResponse = await axios.get(`${AUTH_SERVICE_URL}/api/teams/${teamId}`, {
+      const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
         headers: { Authorization: req.header('Authorization') }
       });
 
-      if (!teamResponse.data.success) {
+      // Team service returns team object directly, not wrapped in success structure
+      if (!teamResponse.data || teamResponse.data.error) {
         return res.status(404).json({
           success: false,
           message: 'Team not found'
         });
       }
 
-      const team = teamResponse.data.team;
+      const team = teamResponse.data;
+      
+      console.log('🔍 Team response debugging:');
+      console.log('  - teamResponse.status:', teamResponse.status);
+      console.log('  - teamResponse.data:', JSON.stringify(teamResponse.data, null, 2));
+      console.log('  - team object:', team);
+      console.log('  - team.captain:', team ? team.captain : 'team is undefined');
+      console.log('  - typeof team.captain:', team ? typeof team.captain : 'N/A');
+      
+      console.log('🔍 User debugging:');
+      console.log('  - req.user:', JSON.stringify(req.user, null, 2));
+      console.log('  - req.user.userId:', req.user ? req.user.userId : 'req.user is undefined');
+      console.log('  - typeof req.user.userId:', req.user ? typeof req.user.userId : 'N/A');
       
       // Check if the current user is the team captain
+      if (!team || !team.captain) {
+        return res.status(404).json({
+          success: false,
+          message: 'Team or captain information not found'
+        });
+      }
+      
+      if (!req.user || !req.user.userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'User information not found in request'
+        });
+      }
+      
       if (team.captain.toString() !== req.user.userId.toString()) {
         return res.status(403).json({
           success: false,
@@ -67,14 +106,20 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     // Get court details
     let courtDetails;
     try {
+      console.log('🏟️ Fetching court details for ID:', courtId);
       const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
-      if (!courtResponse.data.success) {
+      console.log('🏟️ Court response status:', courtResponse.status);
+      console.log('🏟️ Court response data:', JSON.stringify(courtResponse.data, null, 2));
+      
+      // Court service returns court object directly, not wrapped in success structure
+      if (!courtResponse.data || courtResponse.data.error) {
+        console.log('❌ Court not found or error in response');
         return res.status(404).json({
           success: false,
           message: 'Court not found'
         });
       }
-      courtDetails = courtResponse.data.court;
+      courtDetails = courtResponse.data;
     } catch (error) {
       console.error('Court verification error:', error);
       return res.status(500).json({
@@ -83,17 +128,26 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       });
     }
 
+    // Use court's predefined match duration - set by manager, not modifiable by players
+    const duration = courtDetails.matchTime;
+
     // Get company details
     let companyDetails;
     try {
       const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${courtDetails.companyId}`);
-      if (!companyResponse.data.success) {
+      
+      console.log('🏢 Company response debugging:');
+      console.log('  - companyResponse.status:', companyResponse.status);
+      console.log('  - companyResponse.data:', JSON.stringify(companyResponse.data, null, 2));
+      
+      // Company service returns company object directly, not wrapped in success structure
+      if (!companyResponse.data || companyResponse.data.message) {
         return res.status(404).json({
           success: false,
           message: 'Company not found'
         });
       }
-      companyDetails = companyResponse.data.company;
+      companyDetails = companyResponse.data;
     } catch (error) {
       console.error('Company verification error:', error);
       return res.status(500).json({
@@ -136,9 +190,14 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       });
     }
 
-    // Calculate pricing based on schedule configuration
-    const schedule = calendarConfig.schedule;
-    const pricePerHour = schedule.pricing?.pricePerHour || 50;
+    console.log('📅 Calendar config debugging:');
+    console.log('  - calendarConfig:', JSON.stringify(calendarConfig, null, 2));
+    console.log('  - calendarConfig.schedule:', calendarConfig.schedule);
+    console.log('  - calendarConfig.pricing:', calendarConfig.pricing);
+
+    // Calculate pricing based on calendar configuration
+    // Note: pricing is directly in calendarConfig, not under schedule
+    const pricePerHour = calendarConfig.pricing?.basePrice || 50;
     const durationHours = duration / 60;
     let totalPrice = pricePerHour * durationHours;
 
@@ -147,15 +206,17 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     const today = moment();
     const daysInAdvance = bookingDate.diff(today, 'days');
     
-    if (daysInAdvance >= (schedule.advanceBookingDays || 30)) {
-      totalPrice = schedule.pricing?.advanceBookingPrice || totalPrice;
+    if (daysInAdvance >= (calendarConfig.advanceBookingDays || 30)) {
+      // Apply advance booking pricing if configured
+      // For now, keep the base price
+      totalPrice = pricePerHour * durationHours;
     }
 
     // Get team details for caching
-    const teamResponse = await axios.get(`${AUTH_SERVICE_URL}/api/teams/${teamId}`, {
+    const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
       headers: { Authorization: req.header('Authorization') }
     });
-    const team = teamResponse.data.team;
+    const team = teamResponse.data;
 
     // Get captain details
     const captainResponse = await axios.get(`${AUTH_SERVICE_URL}/api/auth/user/${team.captain}`, {
@@ -163,8 +224,16 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     });
     const captain = captainResponse.data.user;
 
+    console.log('📝 About to create booking with data:');
+    console.log('  - courtDetails object:', JSON.stringify({
+      name: courtDetails.name || 'Unknown Court',
+      type: courtDetails.type || 'Unknown Type',
+      address: courtDetails.address || '',
+      city: courtDetails.city || ''
+    }, null, 2));
+    
     // Create the team booking
-    const booking = new Booking({
+    const bookingData = {
       courtId,
       companyId: courtDetails.companyId,
       userId: req.user.userId, // Captain's user ID
@@ -178,13 +247,13 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       totalPrice,
       pricePerHour,
       notes: notes || '',
-      status: schedule.autoConfirmBookings ? 'confirmed' : 'pending',
+      status: calendarConfig.autoConfirmBookings ? 'confirmed' : 'pending',
       // Cached details
       courtDetails: {
-        name: courtDetails.name,
-        type: courtDetails.type,
-        address: courtDetails.address,
-        city: courtDetails.city
+        name: courtDetails.name || 'Unknown Court',
+        type: courtDetails.type || 'Unknown Type',
+        address: courtDetails.address || '',
+        city: courtDetails.city || ''
       },
       companyDetails: {
         companyName: companyDetails.companyName,
@@ -198,14 +267,44 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
         phone: captain.phoneNumber
       },
       teamDetails: {
-        teamName: team.teamName,
+        teamName: team.name || team.teamName, // Use team.name as shown in debugging
         captainName: captain.fullName,
         captainEmail: captain.email,
         memberCount: team.members?.length || 1
       }
-    });
+    };
+
+    console.log('📝 Full booking data:', JSON.stringify(bookingData, null, 2));
+    
+    const booking = new Booking(bookingData);
+
+    console.log('📝 About to save booking with data:', JSON.stringify(booking.toObject(), null, 2));
 
     await booking.save();
+
+    console.log('✅ Booking saved successfully with ID:', booking._id);
+
+    // Send confirmation email
+    try {
+      const emailDetails = {
+        courtName: courtDetails.name,
+        teamName: team.name || team.teamName,
+        date: booking.date,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        duration: booking.duration,
+        totalPrice: booking.totalPrice,
+        bookingId: booking._id,
+        captainName: captain.fullName
+      };
+
+      console.log('📧 Sending confirmation email to:', captain.email);
+      await sendBookingConfirmation(captain.email, emailDetails);
+      console.log('✅ Confirmation email sent successfully');
+    } catch (emailError) {
+      console.error('❌ Failed to send confirmation email:', emailError.message);
+      // Don't fail the booking if email fails - just log the error
+    }
 
     res.status(201).json({
       success: true,
@@ -213,7 +312,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       booking: {
         id: booking._id,
         courtName: courtDetails.name,
-        teamName: team.teamName,
+        teamName: team.name || team.teamName, // Use team.name as shown in debugging
         date: booking.formattedDate,
         startTime: booking.startTime,
         endTime: booking.endTime,
@@ -225,7 +324,10 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Team booking creation error:', error);
+    console.error('💥 Team booking creation error:', error);
+    console.error('💥 Error message:', error.message);
+    console.error('💥 Error stack:', error.stack);
+    console.error('💥 Request data was:', JSON.stringify(req.body, null, 2));
     res.status(500).json({
       success: false,
       message: 'Failed to create team booking',
@@ -244,21 +346,33 @@ router.get('/team/:teamId', verifyToken, verifyUser, async (req, res) => {
 
     // Verify that the user is a member or captain of the team
     try {
-      const teamResponse = await axios.get(`${AUTH_SERVICE_URL}/api/teams/${teamId}`, {
+      const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
         headers: { Authorization: req.header('Authorization') }
       });
 
-      if (!teamResponse.data.success) {
+      // Team service returns team object directly, not wrapped in success structure
+      if (!teamResponse.data || teamResponse.data.error) {
         return res.status(404).json({
           success: false,
           message: 'Team not found'
         });
       }
 
-      const team = teamResponse.data.team;
-      const isMember = team.members?.includes(req.user.userId) || team.captain.toString() === req.user.userId.toString();
+      const team = teamResponse.data;
+      const userIdString = req.user.userId ? req.user.userId.toString() : '';
+      const captainIdString = team.captain ? team.captain.toString() : '';
       
-      if (!isMember) {
+      // Check if user is captain
+      const isCaptain = captainIdString === userIdString;
+      
+      // Check if user is a member (members array contains objects with userId field)
+      const isMember = team.members?.some(member => 
+        member.userId && member.userId.toString() === userIdString
+      );
+      
+      const hasAccess = isCaptain || isMember;
+      
+      if (!hasAccess) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You are not a member of this team'
@@ -323,6 +437,26 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       });
     }
 
+    // Get court details to get the fixed match duration
+    let courtDetails;
+    try {
+      const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+      // Court service returns court object directly, not wrapped in success structure
+      if (!courtResponse.data || courtResponse.data.error) {
+        return res.status(404).json({
+          success: false,
+          message: 'Court not found'
+        });
+      }
+      courtDetails = courtResponse.data;
+    } catch (error) {
+      console.error('Court verification error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to verify court'
+      });
+    }
+
     // Get calendar configuration
     const calendarConfig = await CalendarConfig.findOne({ courtId });
     if (!calendarConfig) {
@@ -332,12 +466,11 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       });
     }
 
-    const schedule = calendarConfig.schedule;
     const selectedDate = moment(date);
     const dayOfWeek = selectedDate.format('dddd').toLowerCase();
     
     // Check if court is open on this day
-    const workingHours = schedule.workingHours[dayOfWeek];
+    const workingHours = calendarConfig.workingHours[dayOfWeek];
     if (!workingHours || !workingHours.isOpen) {
       return res.json({
         success: true,
@@ -349,26 +482,20 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
     // Get available slots using the static method
     const availableSlots = await Booking.getAvailableSlots(courtId, new Date(date), workingHours);
     
-    // Get available match durations from schedule
-    const availableMatchDurations = schedule.pricing?.availableMatchDurations || [60, 90, 120];
-    const pricePerHour = schedule.pricing?.pricePerHour || 50;
+    // Use court's fixed match duration (set by manager)
+    const matchDuration = courtDetails.matchTime;
+    const pricePerHour = calendarConfig.pricing?.basePrice || 50;
+    const hours = matchDuration / 60;
+    const price = pricePerHour * hours;
 
-    // Format response with pricing information
+    // Format response with the fixed duration and pricing
     const slotsWithPricing = availableSlots.map(slot => {
-      const slotPricing = availableMatchDurations.map(duration => {
-        const hours = duration / 60;
-        const price = pricePerHour * hours;
-        return {
-          duration,
-          durationLabel: `${duration}min`,
-          price,
-          priceLabel: `${price} DT`
-        };
-      });
-
       return {
         time: slot,
-        availableDurations: slotPricing
+        duration: matchDuration,
+        durationLabel: `${matchDuration}min`,
+        price: price,
+        priceLabel: `${price} DT`
       };
     });
 
@@ -378,7 +505,9 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       dayOfWeek: dayOfWeek,
       workingHours: workingHours,
       availableSlots: slotsWithPricing,
-      pricePerHour
+      matchDuration: matchDuration,
+      pricePerHour,
+      fixedDuration: true // Indicates that duration is fixed by manager
     });
 
   } catch (error) {

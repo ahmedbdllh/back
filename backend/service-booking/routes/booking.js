@@ -116,14 +116,13 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       courtId,
       date,
       startTime,
-      endTime,
       teamSize,
       players = [],
       notes
     } = req.body;
 
     // Validate required fields
-    if (!courtId || !date || !startTime || !endTime || !teamSize) {
+    if (!courtId || !date || !startTime || !teamSize) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
@@ -141,6 +140,17 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
 
     const court = courtResponse.data.court;
     const companyId = court.companyId;
+    
+    // Use court's predefined match duration - players cannot modify this
+    const matchDuration = court.matchTime; // This is set by the manager
+    
+    // Calculate end time based on court's match duration
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const startTotalMinutes = startHour * 60 + startMin;
+    const endTotalMinutes = startTotalMinutes + matchDuration;
+    const endHour = Math.floor(endTotalMinutes / 60);
+    const endMin = endTotalMinutes % 60;
+    const endTime = `${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
 
     // Get company details
     const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${companyId}`);
@@ -221,22 +231,14 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       });
     }
 
-    // Calculate duration
-    const [startHour, startMin] = startTime.split(':').map(Number);
-    const [endHour, endMin] = endTime.split(':').map(Number);
-    const duration = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+    // Calculate duration - use court's predefined match duration
+    const duration = matchDuration; // Set by manager, not modifiable by players
 
-    if (duration < calendarConfig.minBookingDuration) {
+    // Validate that the booking doesn't exceed court working hours
+    if (endHour >= 24 || (endHour === 23 && endMin > 30)) {
       return res.status(400).json({
         success: false,
-        message: `Minimum booking duration is ${calendarConfig.minBookingDuration} minutes`
-      });
-    }
-
-    if (duration > calendarConfig.maxBookingDuration) {
-      return res.status(400).json({
-        success: false,
-        message: `Maximum booking duration is ${calendarConfig.maxBookingDuration} minutes`
+        message: 'Booking would extend beyond valid hours (23:30)'
       });
     }
 
