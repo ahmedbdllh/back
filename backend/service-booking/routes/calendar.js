@@ -240,24 +240,25 @@ router.get('/:courtId/available-slots', async (req, res) => {
       });
     }
 
-    // Get available slots using court's match time
-    const availableSlots = await Booking.getAvailableSlots(courtId, targetDate, workingHours, court.matchTime);
+    // Get all slots with status using the new static method
+    const allSlotsWithStatus = await Booking.getAllSlotsWithStatus(courtId, targetDate, workingHours, court.matchTime);
 
     // Calculate price for each slot using court's match duration
     const matchDuration = court.matchTime;
-    const slotsWithPricing = availableSlots.map(slot => {
-      const startMoment = moment(slot, 'HH:mm');
-      const endMoment = startMoment.clone().add(matchDuration, 'minutes');
-      const endTime = endMoment.format('HH:mm');
-      const price = calendarConfig.calculatePrice(targetDate, slot, endTime);
+    const slotsWithPricingAndStatus = allSlotsWithStatus.map(slot => {
+      const price = slot.isAvailable ? calendarConfig.calculatePrice(targetDate, slot.startTime, slot.endTime) : null;
       
       return {
-        startTime: slot,
-        endTime,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
         duration: matchDuration,
         durationLabel: `${matchDuration}min`,
         price: price,
-        pricePerHour: calendarConfig.pricing.basePrice
+        pricePerHour: calendarConfig.pricing.basePrice,
+        isAvailable: slot.isAvailable,
+        isBooked: slot.isBooked,
+        status: slot.isAvailable ? 'available' : 'booked',
+        booking: slot.booking
       };
     });
 
@@ -266,7 +267,8 @@ router.get('/:courtId/available-slots', async (req, res) => {
       date: date,
       dayName,
       workingHours,
-      availableSlots: slotsWithPricing,
+      availableSlots: slotsWithPricingAndStatus.filter(slot => slot.isAvailable), // Only available slots for booking
+      allSlots: slotsWithPricingAndStatus, // All slots with status for UI display
       slotDuration: calendarConfig.slotDuration,
       minBookingDuration: calendarConfig.minBookingDuration,
       maxBookingDuration: calendarConfig.maxBookingDuration

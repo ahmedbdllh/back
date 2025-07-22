@@ -261,11 +261,10 @@ const BookingHistory = ({ user }) => {
                         </td>
                         <td className="py-4 px-4">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            booking.status === 'confirmed' ? 'bg-green-600/20 text-green-400' :
                             booking.status === 'cancelled' ? 'bg-red-600/20 text-red-400' :
-                            'bg-yellow-600/20 text-yellow-400'
+                            'bg-green-600/20 text-green-400'
                           }`}>
-                            {booking.status?.charAt(0).toUpperCase() + booking.status?.slice(1) || 'Pending'}
+                            {booking.status === 'cancelled' ? 'Cancelled' : 'Confirmed'}
                           </span>
                         </td>
                         <td className="py-4 px-4 text-center">

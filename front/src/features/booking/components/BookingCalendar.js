@@ -125,11 +125,33 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
       const minutes = actualMinutes % 60;
       const timeString = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
       
-      slots.push({
-        startTime: timeString,
-        isAvailable: true,
-        id: `slot-${timeString}`
-      });
+      // Add time-awareness: filter out past slots for today
+      const today = new Date();
+      const isToday = date.toDateString() === today.toDateString();
+      
+      if (isToday) {
+        const currentHour = today.getHours();
+        const currentMinute = today.getMinutes();
+        const currentTimeInMinutes = currentHour * 60 + currentMinute;
+        const slotStartMinutes = hours * 60 + minutes;
+        const timeBuffer = 30; // 30-minute buffer for realistic booking
+        
+        // Only add future slots (with buffer) for today
+        if (slotStartMinutes > currentTimeInMinutes + timeBuffer) {
+          slots.push({
+            startTime: timeString,
+            isAvailable: true,
+            id: `slot-${timeString}`
+          });
+        }
+      } else {
+        // For future dates, add all slots
+        slots.push({
+          startTime: timeString,
+          isAvailable: true,
+          id: `slot-${timeString}`
+        });
+      }
     }
 
     return slots;
@@ -226,19 +248,33 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
   const fetchAvailableSlots = async () => {
     try {
       setLoading(true);
-      // Generate slots based on court's configured working hours
-      const slots = generateSlots(selectedDate);
-      setAvailableSlots(slots);
+      const dateStr = selectedDate.toISOString().split('T')[0];
       
-      // Optionally, you can still fetch existing bookings to mark slots as unavailable
-      // const dateStr = selectedDate.toISOString().split('T')[0];
-      // const response = await calendarService.getAvailableSlots(court._id, dateStr);
-      // const existingBookings = response.bookedSlots || [];
-      // Mark slots as unavailable if they're already booked
+      // Fetch only available slots from API (booked slots are filtered out on backend)
+      const response = await fetch(`${process.env.REACT_APP_BOOKING_SERVICE_URL || 'http://localhost:5005/api'}/bookings/available-slots/${court._id}?date=${dateStr}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Use only the availableSlots array (booked slots are already filtered out)
+        setAvailableSlots(data.availableSlots || []);
+        console.log(`📅 Loaded ${data.availableSlots?.length || 0} available slots for ${dateStr}`);
+      } else {
+        console.warn('❌ API failed, falling back to manual slot generation');
+        // Fallback to generating slots manually if API fails
+        const slots = generateSlots(selectedDate);
+        setAvailableSlots(slots);
+      }
       
     } catch (err) {
-      setError('Failed to load available slots');
       console.error('Slots fetch error:', err);
+      console.warn('❌ API error, falling back to manual slot generation');
+      // Fallback to generating slots manually
+      const slots = generateSlots(selectedDate);
+      setAvailableSlots(slots);
     } finally {
       setLoading(false);
     }
@@ -252,10 +288,19 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
   };
 
   const handleSlotSelect = (slot) => {
-    setSelectedSlot(slot);
+    // Normalize slot data to handle both old and new formats
+    const normalizedSlot = {
+      startTime: slot.startTime || slot.time,
+      endTime: slot.endTime,
+      duration: slot.duration || court?.matchTime || 90,
+      price: slot.price,
+      ...slot
+    };
+    
+    setSelectedSlot(normalizedSlot);
     setBookingDetails(prev => ({
       ...prev,
-      duration: court?.matchTime || 90 // Use court's fixed match duration
+      duration: normalizedSlot.duration // Use slot's duration or court's fixed match duration
     }));
   };
 
@@ -627,8 +672,10 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
         {/* Time slots grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {availableSlots.map((slot, index) => {
-            const isSelected = selectedSlot?.startTime === slot.startTime;
-            const endTime = calculateEndTime(slot.startTime, duration);
+            // Since we only get available slots from API, all slots are selectable
+            const startTime = slot.startTime || slot.time;
+            const isSelected = selectedSlot?.startTime === startTime;
+            const endTime = calculateEndTime(startTime, duration);
             
             return (
               <motion.button
@@ -669,14 +716,19 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
                   
                   <div className="text-left">
                     <div className="font-bold text-lg mb-1">
-                      {convertTo12Hour(slot.startTime)}
+                      {convertTo12Hour(startTime)}
                     </div>
                     <div className={`text-sm ${isSelected ? 'text-white/90' : 'text-white/60'}`}>
-                      to {endTime}
+                      {`to ${endTime}`}
                     </div>
                     <div className={`text-xs mt-2 ${isSelected ? 'text-white/80' : 'text-white/50'}`}>
                       {duration} minutes
                     </div>
+                    {slot.price && (
+                      <div className={`text-xs mt-1 font-medium ${isSelected ? 'text-white' : 'text-green-400'}`}>
+                        {slot.priceLabel || `${slot.price} DT`}
+                      </div>
+                    )}
                   </div>
                 </div>
 

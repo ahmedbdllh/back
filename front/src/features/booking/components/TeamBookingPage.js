@@ -66,11 +66,12 @@ const TeamBookingPage = () => {
 
       const data = await response.json();
       if (data.success) {
-        setAvailableSlots(data.availableSlots || []);
+        setAvailableSlots(data.availableSlots || []); // Only available slots (booked slots are hidden)
         // Set the court's fixed duration
         if (data.matchDuration) {
           setCourtDuration(data.matchDuration);
         }
+        console.log(`📅 Loaded ${data.availableSlots?.length || 0} available slots for ${selectedDate} (booked slots hidden)`);
       } else {
         setError(data.message || 'Failed to load available slots');
       }
@@ -209,29 +210,47 @@ const TeamBookingPage = () => {
               </div>
 
               {/* Time Slot Selection */}
-              {availableSlots.length > 0 && (
+              {availableSlots.length > 0 ? (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">
-                    Available Time Slots *
+                    Available Time Slots
                   </label>
+                  <div className="mt-2 mb-4 flex items-center gap-4 text-xs">
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 bg-green-500 rounded"></div>
+                      <span className="text-gray-600">Available slots (booked times are hidden)</span>
+                    </div>
+                  </div>
                   <div className="mt-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {availableSlots.map(slot => (
                       <button
-                        key={slot.time}
+                        key={slot.startTime}
                         type="button"
-                        onClick={() => setBookingData(prev => ({ ...prev, startTime: slot.time }))}
-                        className={`p-3 rounded-lg border text-sm font-medium transition-colors ${
-                          bookingData.startTime === slot.time
+                        onClick={() => setBookingData(prev => ({ ...prev, startTime: slot.startTime }))}
+                        className={`p-3 rounded-lg border text-sm font-medium transition-colors relative ${
+                          bookingData.startTime === slot.startTime
                             ? 'bg-blue-600 text-white border-blue-600'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                            : 'bg-green-50 text-green-700 border-green-300 hover:bg-green-100'
                         }`}
                       >
-                        {slot.time}
+                        <div className="flex flex-col">
+                          <span className="font-medium">{slot.startTime}</span>
+                          <span className="text-xs">
+                            {slot.priceLabel}
+                          </span>
+                        </div>
                       </button>
                     ))}
                   </div>
                 </div>
-              )}
+              ) : selectedCourt && selectedDate ? (
+                <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                  <div className="text-center text-gray-600">
+                    <p className="font-medium">No available time slots</p>
+                    <p className="text-sm mt-1">All time slots for {selectedDate} are booked. Please try a different date.</p>
+                  </div>
+                </div>
+              ) : null}
 
               {/* Duration Display (Read-only - set by manager) */}
               {bookingData.startTime && (

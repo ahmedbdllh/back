@@ -5,7 +5,7 @@ const axios = require('axios');
 const Booking = require('../models/Booking');
 const CalendarConfig = require('../models/CalendarConfig');
 const { verifyToken, verifyUser } = require('../middleware/auth');
-const { sendBookingConfirmation } = require('../services/emailService');
+const { sendBookingConfirmation, sendManagerNotification } = require('../services/emailService');
 
 // Service URLs
 const COURT_SERVICE_URL = process.env.COURT_SERVICE_URL || 'http://localhost:5003';
@@ -140,6 +140,10 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
 
     // Get company details
     let companyDetails;
+    let managerEmail = null;
+    let managerName = null;
+    let managerPhone = null;
+    
     try {
       const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${courtDetails.companyId}`);
       
@@ -155,6 +159,35 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
         });
       }
       companyDetails = companyResponse.data;
+      
+      // Get manager/owner details from auth service using ownerId
+      if (companyDetails.ownerId) {
+        try {
+          console.log('🔍 Fetching manager details for ownerId:', companyDetails.ownerId);
+          
+          const managerResponse = await axios.get(`${AUTH_SERVICE_URL}/api/auth/user/${companyDetails.ownerId}`, {
+            headers: { 
+              'x-auth-token': req.header('Authorization')?.replace('Bearer ', '')
+            }
+          });
+          
+          console.log('👤 Manager response:', managerResponse.status, JSON.stringify(managerResponse.data, null, 2));
+          
+          if (managerResponse.data.success && managerResponse.data.user) {
+            const manager = managerResponse.data.user;
+            managerEmail = manager.email;
+            managerName = manager.fullName || manager.companyName;
+            managerPhone = manager.phoneNumber;
+            console.log('✅ Team booking - Manager details found:', { 
+              email: managerEmail, 
+              name: managerName, 
+              phone: managerPhone 
+            });
+          }
+        } catch (managerError) {
+          console.error('⚠️ Could not fetch manager details for team booking:', managerError.message);
+        }
+      }
     } catch (error) {
       console.error('Company verification error:', error);
       return res.status(500).json({
@@ -172,7 +205,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     const existingBooking = await Booking.findOne({
       courtId: courtId,
       date: new Date(date),
-      status: { $in: ['pending', 'confirmed'] },
+      status: 'confirmed', // Only check confirmed bookings since we removed pending status
       $or: [
         {
           startTime: { $lt: endTime },
@@ -184,7 +217,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     if (existingBooking) {
       return res.status(409).json({
         success: false,
-        message: 'Time slot is already booked'
+        message: 'This time slot has just been booked by another user. Please refresh and select a different time.'
       });
     }
 
@@ -247,7 +280,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       teamSize: team.members?.length || 1,
       totalPrice,
       notes: notes || '',
-      status: calendarConfig.autoConfirmBookings ? 'confirmed' : 'pending',
+      status: 'confirmed', // Always confirmed, no pending approval needed
       // Cached details
       courtDetails: {
         name: courtDetails.name || 'Unknown Court',
@@ -257,9 +290,9 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       },
       companyDetails: {
         companyName: companyDetails.companyName,
-        managerName: companyDetails.managerName,
-        managerEmail: companyDetails.managerEmail,
-        managerPhone: companyDetails.managerPhone
+        managerName: managerName,
+        managerEmail: managerEmail,
+        managerPhone: managerPhone
       },
       userDetails: {
         name: captain.fullName,
@@ -284,7 +317,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
 
     console.log('✅ Booking saved successfully with ID:', booking._id);
 
-    // Send confirmation email
+    // Send confirmation email to team captain
     try {
       const emailDetails = {
         courtName: courtDetails.name,
@@ -304,6 +337,40 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     } catch (emailError) {
       console.error('❌ Failed to send confirmation email:', emailError.message);
       // Don't fail the booking if email fails - just log the error
+    }
+
+    // Send notification email to court manager
+    if (managerEmail) {
+      try {
+        const managerEmailDetails = {
+          courtName: courtDetails.name,
+          companyName: companyDetails.companyName,
+          teamName: team.name || team.teamName,
+          playerName: captain.fullName,
+          playerEmail: captain.email,
+          date: booking.date,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          duration: booking.duration,
+          totalPrice: booking.totalPrice,
+          bookingId: booking._id,
+          teamSize: team.members?.length || 1
+        };
+
+        console.log('📧 Sending manager notification email to:', managerEmail);
+        await sendManagerNotification(managerEmail, managerEmailDetails);
+        console.log('✅ Manager notification email sent successfully');
+      } catch (emailError) {
+        console.error('❌ Failed to send manager notification email:', emailError.message);
+        // Don't fail the booking if email fails - just log the error
+      }
+    } else {
+      console.log('⚠️ No manager email found - skipping manager notification for team booking');
+      console.log('📝 Company details:', {
+        companyName: companyDetails.companyName,
+        ownerId: companyDetails.ownerId,
+        ownerRole: companyDetails.ownerRole
+      });
     }
 
     res.status(201).json({
@@ -470,6 +537,9 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
     const selectedDate = moment(date);
     const dayOfWeek = selectedDate.format('dddd').toLowerCase();
     
+    // Use court's fixed match duration (set by manager)
+    const matchDuration = courtDetails.matchTime;
+    
     // Check if court is open on this day
     const workingHours = calendarConfig.workingHours[dayOfWeek];
     if (!workingHours || !workingHours.isOpen) {
@@ -480,11 +550,10 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       });
     }
 
-    // Get available slots using the static method
-    const availableSlots = await Booking.getAvailableSlots(courtId, new Date(date), workingHours);
+    // Get only available slots (excluding booked ones)
+    const availableSlots = await Booking.getAvailableSlots(courtId, new Date(date), workingHours, matchDuration);
     
-    // Use court's fixed match duration (set by manager)
-    const matchDuration = courtDetails.matchTime;
+    // Get pricing configuration
     const managerPrice = calendarConfig.pricing?.pricePerMatch || calendarConfig.pricing?.basePrice || 50;
     
     // For slots display, we need to get team info to calculate correct price
@@ -508,10 +577,16 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
     console.log('  - Team size:', teamSize);
     console.log('  - Total price:', price, 'TND');
 
-    // Format response with the fixed duration and pricing
+    // Format response with pricing information (only available slots)
     const slotsWithPricing = availableSlots.map(slot => {
+      const startMoment = moment(slot, 'HH:mm');
+      const endMoment = startMoment.clone().add(matchDuration, 'minutes');
+      const endTime = endMoment.format('HH:mm');
+      
       return {
         time: slot,
+        startTime: slot,
+        endTime: endTime,
         duration: matchDuration,
         durationLabel: `${matchDuration}min`,
         price: price,
@@ -524,7 +599,7 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       date: selectedDate.format('YYYY-MM-DD'),
       dayOfWeek: dayOfWeek,
       workingHours: workingHours,
-      availableSlots: slotsWithPricing,
+      availableSlots: slotsWithPricing, // Only truly available slots (booked slots are hidden)
       matchDuration: matchDuration,
       managerPrice: managerPrice,
       pricePerPerson: 15,
