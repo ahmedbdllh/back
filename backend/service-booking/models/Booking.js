@@ -77,7 +77,8 @@ const bookingSchema = new mongoose.Schema({
   },
   pricePerHour: {
     type: Number,
-    required: true,
+    required: false,
+    default: 0,
     min: 0
   },
   paymentStatus: {
@@ -99,28 +100,11 @@ const bookingSchema = new mongoose.Schema({
     maxlength: 200
   },
   // Court and company details (cached for faster queries)
-  courtDetails: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
-  },
-  companyDetails: {
-    companyName: String,
-    managerName: String,
-    managerEmail: String,
-    managerPhone: String
-  },
-  userDetails: {
-    name: String,
-    email: String,
-    phone: String
-  },
+  courtDetails: mongoose.Schema.Types.Mixed,
+  companyDetails: mongoose.Schema.Types.Mixed,
+  userDetails: mongoose.Schema.Types.Mixed,
   // Team details (cached for team bookings)
-  teamDetails: {
-    teamName: String,
-    captainName: String,
-    captainEmail: String,
-    memberCount: Number
-  },
+  teamDetails: mongoose.Schema.Types.Mixed,
   createdAt: {
     type: Date,
     default: Date.now
@@ -174,14 +158,14 @@ bookingSchema.methods.hasConflict = async function(courtId, date, startTime, end
 };
 
 // Static method to get available time slots for a court on a specific date
-bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingHours = { start: '04:00', end: '23:30' }, courtMatchTime = 90) {
+bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingHours = { start: '04:00', end: '23:30' }) {
   const existingBookings = await this.find({
     courtId: courtId,
     date: date,
     status: { $in: ['pending', 'confirmed'] }
   }).sort({ startTime: 1 });
 
-  // Generate all possible time slots using the court's match time duration
+  // Generate all possible time slots (90-minute intervals for paddle courts)
   const slots = [];
   let currentHour = parseInt(workingHours.start.split(':')[0]);
   let currentMinute = parseInt(workingHours.start.split(':')[1]);
@@ -193,7 +177,7 @@ bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingH
     
     // Calculate the end time for this slot to check if it fits within working hours
     let slotEndHour = currentHour;
-    let slotEndMinute = currentMinute + courtMatchTime; // Use court's match time instead of hardcoded 90
+    let slotEndMinute = currentMinute + 90;
     
     while (slotEndMinute >= 60) {
       slotEndHour += 1;
@@ -207,7 +191,7 @@ bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingH
       break; // Stop if next slot would exceed working hours
     }
     
-    currentMinute += courtMatchTime; // Use court's match time for intervals
+    currentMinute += 90; // 90-minute intervals for paddle courts
     while (currentMinute >= 60) {
       currentHour += 1;
       currentMinute -= 60;
@@ -233,13 +217,5 @@ bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingH
 
   return availableSlots;
 };
-
-// Clear any existing model to avoid caching issues
-if (mongoose.models.Booking) {
-  delete mongoose.models.Booking;
-}
-if (mongoose.modelSchemas && mongoose.modelSchemas.Booking) {
-  delete mongoose.modelSchemas.Booking;
-}
 
 module.exports = mongoose.model('Booking', bookingSchema);

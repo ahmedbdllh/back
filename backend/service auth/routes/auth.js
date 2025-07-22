@@ -1265,8 +1265,7 @@ const parseDeviceInfo = (userAgent, ip) => {
     }
 
     const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id; // Assuming authMiddleware adds user to req
-
+    const userId = req.user.id;
     try {
       const user = await User.findById(userId).select('+password');
       if (!user) {

@@ -22,7 +22,6 @@ export const Navbar = () => {
   const navigate = useNavigate();
   const navLinks = [
     { label: "Courts", href: "/courts" },
-    { label: "My Bookings", href: "/my-bookings", authRequired: true },
     { label: "Padel", href: "#padel" },
     { label: "Football", href: "#football" },
     { label: "Basketball", href: "#basketball" },

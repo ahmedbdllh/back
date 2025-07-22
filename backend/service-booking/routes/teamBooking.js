@@ -45,6 +45,18 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       });
     }
 
+    // Extract user ID at function scope level
+    if (!req.user || (!req.user.userId && !req.user.id)) {
+      console.log('❌ User verification failed - req.user:', req.user);
+      return res.status(401).json({
+        success: false,
+        message: 'User information not found in request'
+      });
+    }
+    
+    const userId = req.user.userId || req.user.id;
+    console.log('✅ User ID extracted:', userId);
+
     // Verify that the user is the captain of the team
     try {
       const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
@@ -71,7 +83,9 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       console.log('🔍 User debugging:');
       console.log('  - req.user:', JSON.stringify(req.user, null, 2));
       console.log('  - req.user.userId:', req.user ? req.user.userId : 'req.user is undefined');
+      console.log('  - req.user.id:', req.user ? req.user.id : 'req.user is undefined');
       console.log('  - typeof req.user.userId:', req.user ? typeof req.user.userId : 'N/A');
+      console.log('  - typeof req.user.id:', req.user ? typeof req.user.id : 'N/A');
       
       // Check if the current user is the team captain
       if (!team || !team.captain) {
@@ -81,14 +95,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
         });
       }
       
-      if (!req.user || !req.user.userId) {
-        return res.status(401).json({
-          success: false,
-          message: 'User information not found in request'
-        });
-      }
-      
-      if (team.captain.toString() !== req.user.userId.toString()) {
+      if (team.captain.toString() !== userId.toString()) {
         return res.status(403).json({
           success: false,
           message: 'Only team captains can make team bookings'
@@ -195,28 +202,22 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     console.log('  - calendarConfig.schedule:', calendarConfig.schedule);
     console.log('  - calendarConfig.pricing:', calendarConfig.pricing);
 
-    // Calculate pricing based on calendar configuration
-    // Note: pricing is directly in calendarConfig, not under schedule
-    const pricePerHour = calendarConfig.pricing?.basePrice || 50;
-    const durationHours = duration / 60;
-    let totalPrice = pricePerHour * durationHours;
-
-    // Check if this is an advance booking
-    const bookingDate = moment(date);
-    const today = moment();
-    const daysInAdvance = bookingDate.diff(today, 'days');
-    
-    if (daysInAdvance >= (calendarConfig.advanceBookingDays || 30)) {
-      // Apply advance booking pricing if configured
-      // For now, keep the base price
-      totalPrice = pricePerHour * durationHours;
-    }
-
-    // Get team details for caching
+    // Get team details first to count members
     const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
       headers: { Authorization: req.header('Authorization') }
     });
-    const team = teamResponse.data;
+    const team = teamResponse.data.team || teamResponse.data;
+
+    // Calculate pricing: Manager's set price + 15 TND per person
+    const managerPrice = calendarConfig.pricing?.pricePerMatch || calendarConfig.pricing?.basePrice || 50;
+    const teamSize = (team.members ? team.members.length : 0) + 1; // +1 for captain
+    const totalPrice = managerPrice + (15 * teamSize);
+
+    console.log('💰 Pricing calculation:');
+    console.log('  - Manager set price:', managerPrice, 'TND');
+    console.log('  - Team size (including captain):', teamSize);
+    console.log('  - Price per person (15 TND):', 15);
+    console.log('  - Total price:', totalPrice, 'TND');
 
     // Get captain details
     const captainResponse = await axios.get(`${AUTH_SERVICE_URL}/api/auth/user/${team.captain}`, {
@@ -236,7 +237,7 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
     const bookingData = {
       courtId,
       companyId: courtDetails.companyId,
-      userId: req.user.userId, // Captain's user ID
+      userId: userId, // Captain's user ID (extracted earlier)
       teamId,
       bookingType: 'team',
       date: new Date(date),
@@ -245,7 +246,6 @@ router.post('/', verifyToken, verifyUser, async (req, res) => {
       duration,
       teamSize: team.members?.length || 1,
       totalPrice,
-      pricePerHour,
       notes: notes || '',
       status: calendarConfig.autoConfirmBookings ? 'confirmed' : 'pending',
       // Cached details
@@ -359,7 +359,8 @@ router.get('/team/:teamId', verifyToken, verifyUser, async (req, res) => {
       }
 
       const team = teamResponse.data;
-      const userIdString = req.user.userId ? req.user.userId.toString() : '';
+      const userId = req.user.userId || req.user.id;
+      const userIdString = userId ? userId.toString() : '';
       const captainIdString = team.captain ? team.captain.toString() : '';
       
       // Check if user is captain
@@ -484,9 +485,28 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
     
     // Use court's fixed match duration (set by manager)
     const matchDuration = courtDetails.matchTime;
-    const pricePerHour = calendarConfig.pricing?.basePrice || 50;
-    const hours = matchDuration / 60;
-    const price = pricePerHour * hours;
+    const managerPrice = calendarConfig.pricing?.pricePerMatch || calendarConfig.pricing?.basePrice || 50;
+    
+    // For slots display, we need to get team info to calculate correct price
+    let teamSize = 1; // Default to 1 if team not found
+    try {
+      if (req.query.teamId) {
+        const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${req.query.teamId}`, {
+          headers: { Authorization: req.header('Authorization') }
+        });
+        const team = teamResponse.data.team || teamResponse.data;
+        teamSize = (team.members ? team.members.length : 0) + 1; // +1 for captain
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not fetch team for pricing calculation:', error.message);
+    }
+    
+    const price = managerPrice + (15 * teamSize);
+
+    console.log('💰 Available slots pricing:');
+    console.log('  - Manager set price:', managerPrice, 'TND');
+    console.log('  - Team size:', teamSize);
+    console.log('  - Total price:', price, 'TND');
 
     // Format response with the fixed duration and pricing
     const slotsWithPricing = availableSlots.map(slot => {
@@ -506,7 +526,9 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
       workingHours: workingHours,
       availableSlots: slotsWithPricing,
       matchDuration: matchDuration,
-      pricePerHour,
+      managerPrice: managerPrice,
+      pricePerPerson: 15,
+      teamSize: teamSize,
       fixedDuration: true // Indicates that duration is fixed by manager
     });
 
@@ -515,6 +537,177 @@ router.get('/available-slots/:courtId', verifyToken, verifyUser, async (req, res
     res.status(500).json({
       success: false,
       message: 'Failed to get available slots',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/team-bookings/history
+// @desc    Get user's booking history
+// @access  Private
+router.get('/history', verifyToken, verifyUser, async (req, res) => {
+  try {
+    // Extract user ID
+    const userId = req.user.userId || req.user.id;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID not found in token'
+      });
+    }
+
+    console.log('📚 Fetching booking history for user:', userId);
+
+    // Get user's teams first
+    const teamsResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/user/${userId}`, {
+      headers: {
+        'Authorization': req.headers.authorization
+      }
+    });
+
+    const userTeams = teamsResponse.data.teams || [];
+    const teamIds = userTeams.map(team => team._id);
+
+    console.log('👥 User teams:', teamIds);
+
+    // Find all bookings for user's teams
+    const bookings = await Booking.find({
+      teamId: { $in: teamIds }
+    }).sort({ date: -1, startTime: -1 });
+
+    console.log('📅 Found bookings:', bookings.length);
+
+    // Enrich bookings with court and team data
+    const enrichedBookings = await Promise.all(bookings.map(async (booking) => {
+      try {
+        // Get court data
+        let courtData = null;
+        try {
+          const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${booking.courtId}`);
+          courtData = courtResponse.data; // Court service returns court object directly
+        } catch (courtError) {
+          console.warn('⚠️ Could not fetch court data for booking:', booking._id);
+        }
+
+        // Get team data
+        let teamData = null;
+        try {
+          const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${booking.teamId}`);
+          teamData = teamResponse.data; // Team service returns team object directly
+        } catch (teamError) {
+          console.warn('⚠️ Could not fetch team data for booking:', booking._id);
+        }
+
+        return {
+          ...booking.toObject(),
+          court: courtData,
+          team: teamData
+        };
+      } catch (error) {
+        console.error('Error enriching booking:', booking._id, error);
+        return booking.toObject();
+      }
+    }));
+
+    res.json({
+      success: true,
+      bookings: enrichedBookings
+    });
+
+  } catch (error) {
+    console.error('Get booking history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get booking history',
+      error: error.message
+    });
+  }
+});
+
+// @route   PUT /api/team-bookings/:bookingId/cancel
+// @desc    Cancel a booking (must be 12+ hours before)
+// @access  Private
+router.put('/:bookingId/cancel', verifyToken, verifyUser, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const userId = req.user.userId || req.user.id;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID not found in token'
+      });
+    }
+
+    console.log('❌ Cancelling booking:', bookingId, 'for user:', userId);
+
+    // Find the booking
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    // Check if booking is already cancelled
+    if (booking.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Booking is already cancelled'
+      });
+    }
+
+    // Check if user owns this booking (via team membership)
+    const teamsResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/user/${userId}`, {
+      headers: {
+        'Authorization': req.headers.authorization
+      }
+    });
+
+    const userTeams = teamsResponse.data.teams || [];
+    const userTeamIds = userTeams.map(team => team._id);
+
+    if (!userTeamIds.includes(booking.teamId.toString())) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only cancel bookings for your teams'
+      });
+    }
+
+    // Check if cancellation is allowed (12+ hours before)
+    const now = new Date();
+    const bookingDateTime = new Date(`${booking.date}T${booking.startTime}`);
+    const timeDifference = bookingDateTime.getTime() - now.getTime();
+    const hoursDifference = timeDifference / (1000 * 60 * 60);
+
+    if (hoursDifference < 12) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bookings can only be cancelled at least 12 hours in advance'
+      });
+    }
+
+    // Update booking status
+    booking.status = 'cancelled';
+    booking.cancelledAt = new Date();
+    booking.cancelledBy = userId;
+    await booking.save();
+
+    console.log('✅ Booking cancelled successfully:', bookingId);
+
+    res.json({
+      success: true,
+      message: 'Booking cancelled successfully',
+      booking: booking
+    });
+
+  } catch (error) {
+    console.error('Cancel booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel booking',
       error: error.message
     });
   }

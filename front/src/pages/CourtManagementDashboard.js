@@ -1,301 +1,473 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { Card } from '../shared/ui/components/Card';
+import { ToastContainer, useToast } from '../shared/ui/components/Toast';
+import Pagination from '../shared/ui/components/Pagination';
+import SearchBar from '../shared/ui/components/SearchBar';
+import DataTable from '../shared/ui/components/DataTable';
 import { 
-  Clock,
-  BarChart3,
-  Calendar,
-  Users,
-  DollarSign,
-  Edit,
-  Eye,
-  TrendingUp,
-  AlertCircle
+  Calendar, 
+  Clock, 
+  MapPin, 
+  Users, 
+  CheckCircle, 
+  XCircle, 
+  Building,
+  UserCheck
 } from 'lucide-react';
-import { getCourtsByCompany, getCourts, getCourtsByUser } from '../features/court/services/courtService';
-import { scheduleService } from '../features/booking/services/scheduleService';
 
 const CourtManagementDashboard = () => {
-  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('all');
+  const [bookings, setBookings] = useState([]);
   const [courts, setCourts] = useState([]);
-  const [statistics, setStatistics] = useState({});
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(5);
+  
+  // Search and filter states
+  const [filteredBookings, setFilteredBookings] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [courtFilter, setCourtFilter] = useState('all');
+  
+  const { toasts, success, error: showError, removeToast } = useToast();
 
-  useEffect(() => {
-    fetchCourts();
-  }, []);
+  // Search configuration
+  const searchFilters = [
+    {
+      key: 'status',
+      label: 'Status',
+      options: [
+        { value: 'confirmed', label: 'Confirmed' },
+        { value: 'cancelled', label: 'Cancelled' }
+      ]
+    },
+    {
+      key: 'courtId',
+      label: 'Court',
+      options: courts.length > 0 ? courts.map(court => ({
+        value: court._id,
+        label: `${court.name} (${court.companyName})`
+      })) : []
+    }
+  ];
 
-  const fetchCourts = async () => {
+  const sortOptions = [
+    { value: 'date', label: 'Date' },
+    { value: 'userDetails.name', label: 'Player Name' },
+    { value: 'companyName', label: 'Company' }
+  ];
+
+  const handleSearch = (searchParams) => {
+    // Update search states
+    setSearchQuery(searchParams.query || '');
+    setStatusFilter(searchParams.status || 'all');
+    setCourtFilter(searchParams.courtId || 'all');
+    
+    // Reset to first page when search changes
+    setCurrentPage(1);
+  };
+
+  // Apply filters whenever bookings or filter states change
+  const applyFilters = () => {
+    let filtered = [...bookings];
+    
+    console.log('🔍 Applying filters:', {
+      searchQuery,
+      statusFilter,
+      courtFilter,
+      totalBookings: bookings.length,
+      availableCourts: courts.map(c => ({ id: c._id, name: c.name }))
+    });
+    
+    // Apply search query filter
+    if (searchQuery && searchQuery.trim()) {
+      filtered = filtered.filter(booking => 
+        booking.userDetails?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        booking.teamDetails?.teamName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        booking.companyDetails?.companyName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        booking.courtDetails?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        booking.companyName?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      console.log('📝 After search filter:', filtered.length);
+    }
+    
+    // Apply status filter
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'confirmed') {
+        filtered = filtered.filter(booking => booking.status !== 'cancelled');
+      } else if (statusFilter === 'cancelled') {
+        filtered = filtered.filter(booking => booking.status === 'cancelled');
+      }
+      console.log('📊 After status filter:', filtered.length);
+    }
+    
+    // Apply court filter
+    if (courtFilter && courtFilter !== 'all') {
+      console.log('🏟️ Filtering by court:', courtFilter);
+      filtered = filtered.filter(booking => {
+        console.log('🔍 Booking courtId:', booking.courtId, 'Filter courtId:', courtFilter);
+        return booking.courtId === courtFilter;
+      });
+      console.log('🏟️ After court filter:', filtered.length);
+    }
+    
+    console.log('✅ Final filtered results:', filtered.length);
+    setFilteredBookings(filtered);
+  };
+
+  // Effect to apply filters when dependencies change
+  React.useEffect(() => {
+    applyFilters();
+  }, [bookings, searchQuery, statusFilter, courtFilter]);
+
+  // Pagination handlers
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+  };
+
+  const handleItemsPerPageChange = (newItemsPerPage) => {
+    setItemsPerPage(newItemsPerPage);
+    setCurrentPage(1); // Reset to first page
+  };
+
+  // Get current page data from filtered results
+  const totalPages = Math.ceil(filteredBookings.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentBookings = filteredBookings.slice(startIndex, endIndex);
+
+  // Fetch manager's companies and their bookings
+  const fetchManagerData = async () => {
     try {
-      setLoading(true);
-      // Get current user from localStorage
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      console.log('User from localStorage:', user);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        showError('Authentication required');
+        return;
+      }
+
+      console.log('🔍 Starting fetchManagerData...');
+
+      // Get user info first
+      const userResponse = await fetch('http://localhost:5000/api/auth/profile', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
       
-      // Get courts by user ID first
-      const userId = user._id || user.id;
-      console.log('User ID found:', userId);
+      console.log('👤 User response status:', userResponse.status);
       
-      if (userId) {
-        // Get courts by the user's ID
-        const response = await getCourtsByUser(userId);
-        if (response && response.data) {
-          setCourts(response.data || []);
-          await fetchCourtStatistics(response.data || []);
+      if (userResponse.ok) {
+        const userData = await userResponse.json();
+        const userId = userData.user?._id || userData.user?.id;
+        
+        console.log('👤 User data:', userData);
+        console.log('👤 User ID:', userId);
+        
+        if (userId) {
+          // Get all companies owned by this manager
+          const companiesResponse = await fetch(`http://localhost:5001/api/companies/owner/${userId}`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          console.log('🏢 Companies response status:', companiesResponse.status);
+          
+          if (companiesResponse.ok) {
+            const companiesData = await companiesResponse.json();
+            const companies = Array.isArray(companiesData) ? companiesData : (companiesData.companies || []);
+            
+            console.log('🏢 Companies data:', companiesData);
+            console.log('🏢 Found companies:', companies.length);
+            
+            // Get all bookings for all companies
+            let allBookings = [];
+            let allCourts = [];
+            
+            for (const company of companies) {
+              console.log(`🔄 Processing company: ${company.companyName} (${company._id})`);
+              
+              // Get courts for this company
+              try {
+                const courtsResponse = await fetch(`http://localhost:5003/api/courts/company/${company._id}`, {
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                });
+                
+                console.log(`🏟️ Courts response for ${company.companyName}:`, courtsResponse.status);
+                
+                if (courtsResponse.ok) {
+                  const courtsData = await courtsResponse.json();
+                  console.log(`🏟️ Courts data for ${company.companyName}:`, courtsData);
+                  
+                  const companyCourts = (courtsData.courts || []).map(court => ({
+                    ...court,
+                    companyName: company.companyName
+                  }));
+                  allCourts.push(...companyCourts);
+                  console.log(`🏟️ Added ${companyCourts.length} courts for ${company.companyName}`);
+                }
+              } catch (error) {
+                console.warn('Failed to fetch courts for company:', company._id, error);
+              }
+              
+              // Get bookings for this company
+              try {
+                const bookingsUrl = `http://localhost:5005/api/bookings/company/${company._id}?limit=1000`;
+                console.log(`📅 Fetching bookings from: ${bookingsUrl}`);
+                
+                const bookingsResponse = await fetch(bookingsUrl, {
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                });
+                
+                console.log(`📅 Bookings response for ${company.companyName}:`, bookingsResponse.status);
+                
+                if (bookingsResponse.ok) {
+                  const bookingsData = await bookingsResponse.json();
+                  console.log(`📅 Bookings data for ${company.companyName}:`, bookingsData);
+                  
+                  const companyBookings = (bookingsData.bookings || []).map(booking => ({
+                    ...booking,
+                    companyName: company.companyName
+                  }));
+                  allBookings.push(...companyBookings);
+                  console.log(`📅 Added ${companyBookings.length} bookings for ${company.companyName}`);
+                } else {
+                  const errorText = await bookingsResponse.text();
+                  console.error(`❌ Bookings fetch failed for ${company.companyName}:`, errorText);
+                }
+              } catch (error) {
+                console.warn('Failed to fetch bookings for company:', company._id, error);
+              }
+            }
+            
+            console.log('📊 Final results:');
+            console.log('  - Total courts:', allCourts.length);
+            console.log('  - Total bookings:', allBookings.length);
+            console.log('  - All courts:', allCourts);
+            console.log('  - All bookings:', allBookings);
+            console.log('  - Courts with IDs:', allCourts.map(c => ({ id: c._id, name: c.name, company: c.companyName })));
+            console.log('  - Bookings with court IDs:', allBookings.map(b => ({ id: b._id, courtId: b.courtId, player: b.userDetails?.name })));
+            
+            setCourts(allCourts);
+            setBookings(allBookings);
+            // Initialize filtered bookings with all bookings
+            setFilteredBookings(allBookings);
+          } else {
+            const errorText = await companiesResponse.text();
+            console.error('❌ Companies fetch failed:', errorText);
+            setError('Failed to load companies');
+          }
+        } else {
+          console.error('❌ No user ID found in response');
+          setError('No user ID found');
         }
       } else {
-        // Fallback to get all courts if no user ID
-        const response = await getCourts();
-        if (response && response.data) {
-          setCourts(response.data || []);
-          await fetchCourtStatistics(response.data || []);
-        }
+        const errorText = await userResponse.text();
+        console.error('❌ User profile fetch failed:', errorText);
+        setError('Failed to get user information');
       }
-      
-      setError(null);
-    } catch (err) {
-      setError('Failed to load courts');
-      console.error('Courts fetch error:', err);
+    } catch (error) {
+      console.error('Error fetching manager data:', error);
+      setError('Error loading data');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchCourtStatistics = async (courtList) => {
-    const stats = {};
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30); // Last 30 days
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
 
-    for (const court of courtList) {
-      try {
-        const response = await scheduleService.getScheduleStatistics(
-          court._id,
-          startDate.toISOString(),
-          endDate.toISOString()
+  const formatTime = (timeString) => {
+    return new Date(`2000-01-01T${timeString}`).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  // Define columns for DataTable
+  const columns = [
+    {
+      Header: 'Court Name',
+      accessor: 'courtName',
+      Cell: ({ row }) => {
+        const court = courts.find(c => c._id === row.courtId);
+        const courtName = court?.name || row.courtDetails?.name || 'Unknown Court';
+        return (
+          <div className="flex items-center gap-2">
+            <MapPin size={16} className="text-blue-400" />
+            <span className="font-medium text-slate-100">{courtName}</span>
+          </div>
         );
-        stats[court._id] = response.data;
-      } catch (err) {
-        console.error(`Failed to fetch stats for court ${court._id}:`, err);
-        stats[court._id] = {
-          totalBookings: 0,
-          revenue: 0,
-          occupancyRate: 0,
-          averageBookingDuration: 0
-        };
-      }
-    }
-    setStatistics(stats);
-  };
+      },
+    },
+    {
+      Header: 'Company Name',
+      accessor: 'companyName',
+      Cell: ({ row }) => {
+        const court = courts.find(c => c._id === row.courtId);
+        const companyName = court?.companyName || row.companyName || row.companyDetails?.companyName || 'Unknown Company';
+        return (
+          <div className="flex items-center gap-2">
+            <Building size={16} className="text-green-400" />
+            <span className="text-slate-300">{companyName}</span>
+          </div>
+        );
+      },
+    },
+    {
+      Header: 'Player Name',
+      accessor: 'playerName',
+      Cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <UserCheck size={16} className="text-purple-400" />
+          <span className="text-slate-300">{row.userDetails?.name || 'Unknown Player'}</span>
+        </div>
+      ),
+    },
+    {
+      Header: 'Team Name',
+      accessor: 'teamName',
+      Cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <Users size={16} className="text-orange-400" />
+          <span className="text-slate-300">{row.teamDetails?.teamName || 'No Team'}</span>
+        </div>
+      ),
+    },
+    {
+      Header: 'Date & Time',
+      accessor: 'date',
+      Cell: ({ row }) => (
+        <div className="flex flex-col">
+          <div className="flex items-center gap-1">
+            <Calendar size={14} className="text-gray-400" />
+            <span className="text-slate-300">{formatDate(row.date)}</span>
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            <Clock size={14} className="text-gray-400" />
+            <span className="text-sm text-slate-400">
+              {formatTime(row.startTime)} - {formatTime(row.endTime)}
+            </span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      Header: 'Price per Person',
+      accessor: 'price',
+      Cell: () => (
+        <span className="font-semibold text-green-400">15 DT</span>
+      ),
+    },
+    {
+      Header: 'Status',
+      accessor: 'status',
+      Cell: ({ value }) => {
+        if (value === 'cancelled') {
+          return (
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold text-white bg-red-500/80">
+              <XCircle size={14} className="mr-1.5" />
+              Cancelled
+            </span>
+          );
+        } else {
+          return (
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold text-white bg-green-500/80">
+              <CheckCircle size={14} className="mr-1.5" />
+              Confirmed
+            </span>
+          );
+        }
+      },
+    },
+  ];
 
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount || 0);
-  };
-
-  const formatPercentage = (value) => {
-    return `${(value || 0).toFixed(1)}%`;
-  };
-
-  const handleEditCourt = (court) => {
-    // TODO: Open court configuration modal
-    console.log('Edit court:', court);
-    // This will open a modal to configure:
-    // - Price per hour
-    // - Opening/closing times
-    // - Match duration
-    // - Court details
-  };
-
-  const handleViewSchedule = (court) => {
-    // TODO: Navigate to court schedule page
-    console.log('View schedule for court:', court);
-    // This will show the court's booking schedule
-    // with time slots based on opening/closing hours
-  };
-
-  const handleViewStats = (court) => {
-    // TODO: Open court statistics modal
-    console.log('View stats for court:', court);
-    // This will show detailed analytics for the court
-  };
+  useEffect(() => {
+    fetchManagerData();
+  }, []);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 p-6">
-        <div className="flex justify-center items-center h-64">
-          <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+      <div className="p-6 bg-[#0F172A] rounded-lg shadow-md">
+        <div className="text-center py-8">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500 mx-auto"></div>
+          <p className="mt-4 text-gray-400">Loading dashboard...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">My Courts</h1>
-          <p className="text-white/60">Manage your courts, configure pricing, schedules, and operating hours</p>
-        </div>
+    <>
+      <div className="p-6 bg-[#0F172A] rounded-lg shadow-md">
+        <h2 className="text-xl font-semibold text-white mb-4">Court Management Dashboard</h2>
+        <p className="text-gray-400 mb-6">Manage bookings across all your companies and courts</p>
+        
+        {/* Advanced Search Bar */}
+        <SearchBar
+          onSearch={handleSearch}
+          filters={searchFilters}
+          sortOptions={sortOptions}
+          placeholder="Search bookings by player or team name..."
+          className="mb-6"
+        />
 
-        {error && (
-          <div className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center">
-            <AlertCircle size={20} className="text-red-400 mr-2" />
-            <span className="text-red-300">{error}</span>
+        {error ? (
+          <div className="text-red-400 text-center py-8">{error}</div>
+        ) : currentBookings.length === 0 ? (
+          <div className="text-center py-12">
+            <Calendar size={64} className="mx-auto text-gray-400 mb-4" />
+            <h3 className="text-xl font-semibold text-gray-300 mb-2">No bookings found</h3>
+            <p className="text-gray-500">
+              {searchQuery || statusFilter !== 'all' || courtFilter !== 'all'
+                ? "Try adjusting your search filters to see more results." 
+                : "You don't have any bookings yet."}
+            </p>
           </div>
-        )}
-
-        {/* Courts Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {courts.map((court) => {
-            const courtStats = statistics[court._id] || {};
+        ) : (
+          <>
+            <DataTable 
+              columns={columns} 
+              data={currentBookings} 
+              itemsPerPage={itemsPerPage}
+            />
             
-            return (
-              <motion.div
-                key={court._id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-gray-800 rounded-xl overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300"
-              >
-                {/* Court Image */}
-                <div className="relative h-40">
-                  {court.images && court.images.length > 0 ? (
-                    <img
-                      src={court.images[0]}
-                      alt={court.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center">
-                      <Users size={32} className="text-white/60" />
-                    </div>
-                  )}
-                  
-                  {/* Status Badge */}
-                  <div className="absolute top-3 right-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      court.status === 'active' 
-                        ? 'bg-green-500 text-white'
-                        : 'bg-red-500 text-white'
-                    }`}>
-                      {court.status || 'Active'}
-                    </span>
-                  </div>
-
-                  {/* Court Type Badge */}
-                  <div className="absolute top-3 left-3">
-                    <span className="px-2 py-1 bg-blue-600/80 text-white rounded-lg text-xs font-medium capitalize">
-                      {court.type}
-                    </span>
-                  </div>
-
-                  {/* Match Duration Badge */}
-                  <div className="absolute bottom-3 right-3">
-                    <span className="px-2 py-1 bg-black/60 rounded-lg text-white text-xs font-medium">
-                      {court.matchTime || 90}min
-                    </span>
-                  </div>
-                </div>
-
-                {/* Court Info */}
-                <div className="p-4">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-lg font-bold text-white">{court.name}</h3>
-                    <span className="text-xs text-white/60">ID: {court._id.slice(-6)}</span>
-                  </div>
-                  
-                  {/* Location */}
-                  <div className="flex items-center text-white/60 mb-2">
-                    <span className="text-sm">📍 {court.location?.address || 'Location not set'}</span>
-                  </div>
-                  
-                  {/* City */}
-                  <div className="text-white/60 text-sm mb-3">
-                    {court.location?.city || 'City not set'}
-                  </div>
-
-                  {/* Court Configuration */}
-                  <div className="space-y-2 mb-4">
-                    {/* Pricing */}
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/80 text-sm">Price/Hour:</span>
-                      <span className="text-green-400 font-semibold">${court.pricePerHour || 'Not set'}</span>
-                    </div>
-                    
-                    {/* Operating Hours */}
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/80 text-sm">Hours:</span>
-                      <span className="text-white/80 text-sm">
-                        {court.openingTime || '08:00'} - {court.closingTime || '22:00'}
-                      </span>
-                    </div>
-                    
-                    {/* Team size */}
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/80 text-sm">Team Size:</span>
-                      <span className="text-white/80 text-sm">{court.maxPlayersPerTeam || 5} per team</span>
-                    </div>
-                  </div>
-
-                  {/* Quick Stats Row */}
-                  <div className="grid grid-cols-2 gap-2 mb-4 text-center">
-                    <div className="bg-gray-700 rounded-lg p-2">
-                      <div className="text-white font-bold">{courtStats.totalBookings || 0}</div>
-                      <div className="text-white/60 text-xs">Bookings</div>
-                    </div>
-                    <div className="bg-gray-700 rounded-lg p-2">
-                      <div className="text-white font-bold">{formatPercentage(courtStats.occupancyRate)}</div>
-                      <div className="text-white/60 text-xs">Occupancy</div>
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex space-x-2">
-                    <button 
-                      className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-                      onClick={() => handleEditCourt(court)}
-                    >
-                      <Edit size={14} className="mr-1 inline" />
-                      Configure
-                    </button>
-                    
-                    <button 
-                      className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-                      onClick={() => handleViewSchedule(court)}
-                    >
-                      <Calendar size={14} />
-                    </button>
-                    
-                    <button 
-                      className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                      onClick={() => handleViewStats(court)}
-                    >
-                      <BarChart3 size={14} />
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            );
-          })}
-        </div>
-
-        {/* Empty State */}
-        {courts.length === 0 && !loading && (
-          <div className="text-center py-16">
-            <div className="text-white/40 mb-4">
-              <Users size={64} className="mx-auto" />
-            </div>
-            <h3 className="text-xl font-semibold text-white mb-2">No Courts Found</h3>
-            <p className="text-white/60 mb-6">You haven't created any courts yet. Create your first court to start managing bookings.</p>
-            <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              Create New Court
-            </button>
-          </div>
+            {/* Pagination */}
+            {filteredBookings.length > 0 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                total={filteredBookings.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={handlePageChange}
+                onItemsPerPageChange={handleItemsPerPageChange}
+                className="mt-6"
+              />
+            )}
+          </>
         )}
       </div>
-    </div>
+      
+      {/* Toast Container */}
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
+    </>
   );
 };
 

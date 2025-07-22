@@ -6,6 +6,7 @@ import { ProfileStats } from "./ProfileStats"
 import { ProfileAbout } from "./ProfileAbout"
 import { ProfileActivity } from "./ProfileActivity"
 import MyTeamsTab from "./MyTeamsTab"
+import BookingHistory from "./BookingHistory"
 import { Container } from "../../../shared/ui/components/Container"
 import { Card } from "../../../shared/ui/components/Card"
 import { ProfileSkeleton } from "../../../shared/ui/components/SkeletonLoader"
@@ -48,6 +49,7 @@ export const ProfilePage = () => {
     { id: "activity", label: "Activity", icon: "📊" },
     { id: "stats", label: "Statistics", icon: "📈" },
     { id: "myteam", label: "My Team", icon: "⚽" },
+    { id: "bookings", label: "Booking History", icon: "📅" },
     { id: "settings", label: "Settings", icon: "⚙️" },
   ];
   
@@ -140,6 +142,12 @@ export const ProfilePage = () => {
               <Card variant="glass">
                 <MyTeamsTab user={user} />
               </Card>
+            </div>
+          )}
+
+          {activeTab === "bookings" && (
+            <div className="animate-fadeInUp">
+              <BookingHistory user={user} />
             </div>
           )}
 

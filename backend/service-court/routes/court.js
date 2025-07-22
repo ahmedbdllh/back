@@ -13,9 +13,6 @@ router.get('/', courtController.getCourts);
 // Get courts by companyId (requires auth to ensure manager can only see their company's courts)
 router.get('/company/:companyId', auth, managerCompanyAuth, courtController.getCourtsByCompany);
 
-// Get courts by userId (requires auth to ensure user can only see their courts)
-router.get('/user/:userId', auth, courtController.getCourtsByUser);
-
 // Get a single court by ID
 router.get('/:id', courtController.getCourtById);
 

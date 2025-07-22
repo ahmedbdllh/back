@@ -2,7 +2,6 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
-const { testEmailConfiguration } = require('./services/emailService');
 require('dotenv').config();
 
 const app = express();
@@ -52,17 +51,8 @@ app.use('*', (req, res) => {
   });
 });
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`🚀 Booking Service running on port ${PORT}`);
-  
-  // Test email configuration
-  console.log('📧 Testing email configuration...');
-  const emailReady = await testEmailConfiguration();
-  if (emailReady) {
-    console.log('✅ Email service is configured and ready');
-  } else {
-    console.log('⚠️ Email service configuration issue - emails may not be sent');
-  }
 });
 
 module.exports = app;

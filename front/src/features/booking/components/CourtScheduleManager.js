@@ -402,7 +402,7 @@ const CourtScheduleManager = ({ court, isOpen, onClose, onSave }) => {
                       className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                       placeholder="15"
                     />
-                    <p className="text-white/60 text-xs mt-1">Fixed price per match regardless of duration</p>
+                    <p className="text-white/60 text-xs mt-1">Fixed price per person regardless of duration</p>
                   </div>
                   
                   <div className="bg-white/5 rounded-lg p-4">

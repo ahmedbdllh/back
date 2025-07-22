@@ -38,6 +38,7 @@ router.post('/:teamId/invite-player', auth, teamController.sendInvitation);
 
 // User's teams
 router.get('/user/me', auth, teamController.getUserTeams);
+router.get('/user/:userId', auth, teamController.getUserTeamsByUserId);
 
 // Debug routes
 router.get('/debug/auth', auth, teamController.debugAuth);

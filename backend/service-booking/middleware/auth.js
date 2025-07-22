@@ -8,7 +8,11 @@ const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5000'
 const verifyToken = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
 
+  console.log('🔍 verifyToken - Raw Authorization header:', req.header('Authorization'));
+  console.log('🔍 verifyToken - Extracted token:', token ? `${token.substring(0, 30)}...` : 'No token');
+
   if (!token) {
+    console.log('❌ verifyToken - No token provided');
     return res.status(401).json({
       success: false,
       message: 'Access denied. No token provided.'
@@ -17,9 +21,12 @@ const verifyToken = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('✅ verifyToken - Token decoded:', JSON.stringify(decoded, null, 2));
     req.user = decoded;
+    console.log('✅ verifyToken - req.user set to:', JSON.stringify(req.user, null, 2));
     next();
   } catch (error) {
+    console.log('❌ verifyToken - Token verification failed:', error.message);
     res.status(400).json({
       success: false,
       message: 'Invalid token.'
@@ -30,27 +37,45 @@ const verifyToken = (req, res, next) => {
 // Verify user exists in auth service
 const verifyUser = async (req, res, next) => {
   try {
+    console.log('🔍 verifyUser - Starting user verification');
+    console.log('🔍 verifyUser - req.user before auth service call:', JSON.stringify(req.user, null, 2));
+    
     const token = req.header('Authorization');
+    console.log('🔍 verifyUser - Token for auth service:', token ? `${token.substring(0, 30)}...` : 'No token');
+    
     const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/verify`, {
       headers: { Authorization: token }
     });
 
+    console.log('🔍 verifyUser - Auth service response status:', response.status);
+    console.log('🔍 verifyUser - Auth service response:', JSON.stringify(response.data, null, 2));
+
     if (response.data.success) {
-      // Ensure userId is set from the user data
-      req.user = { 
-        ...req.user, 
-        ...response.data.user,
-        userId: response.data.user.id || response.data.user._id
-      };
+      console.log('🔍 verifyUser - Merging user data...');
+      console.log('🔍 verifyUser - Original req.user:', JSON.stringify(req.user, null, 2));
+      console.log('🔍 verifyUser - User data from auth service:', JSON.stringify(response.data.user, null, 2));
+      
+      req.user = { ...req.user, ...response.data.user };
+      
+      // Ensure userId is available for backwards compatibility
+      if (req.user.id && !req.user.userId) {
+        req.user.userId = req.user.id;
+        console.log('✅ verifyUser - Set userId from id:', req.user.userId);
+      }
+      
+      console.log('✅ verifyUser - Final req.user:', JSON.stringify(req.user, null, 2));
+      console.log('✅ verifyUser - User verification successful');
       next();
     } else {
+      console.log('❌ verifyUser - Auth service returned unsuccessful response');
       return res.status(401).json({
         success: false,
         message: 'User verification failed.'
       });
     }
   } catch (error) {
-    console.error('User verification error:', error.message);
+    console.error('❌ verifyUser - Error:', error.message);
+    console.error('❌ verifyUser - Full error:', error);
     res.status(401).json({
       success: false,
       message: 'User verification failed.'

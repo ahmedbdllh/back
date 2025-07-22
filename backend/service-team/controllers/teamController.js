@@ -1014,6 +1014,108 @@ exports.getUserTeams = async (req, res) => {
   }
 };
 
+// Get user's teams by user ID (for other services)
+exports.getUserTeamsByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log('🔍 getUserTeamsByUserId: Called for user ID:', userId);
+
+    // Find teams where user is either captain or a member
+    const teams = await Team.find({
+      $or: [
+        { captain: userId },
+        { 'members.user': userId }
+      ]
+    }).select('name captain members sport avatar formation isPublic createdAt updatedAt');
+
+    console.log('🔍 getUserTeamsByUserId: Found', teams.length, 'teams for user', userId);
+
+    // Get unique user IDs from all teams
+    const userIds = new Set();
+    teams.forEach(team => {
+      if (team.captain) {
+        userIds.add(team.captain.toString());
+      }
+      if (team.members && Array.isArray(team.members)) {
+        team.members.forEach(member => {
+          if (member && member.user) {
+            userIds.add(member.user.toString());
+          }
+        });
+      }
+    });
+
+    console.log('🔍 getUserTeamsByUserId: Fetching user data for', userIds.size, 'users');
+
+    // Fetch user data for all users in these teams
+    let users = [];
+    try {
+      const authResponse = await axios.get(`${process.env.AUTH_SERVICE_URL || 'http://localhost:5000'}/api/auth/users/bulk`, {
+        headers: {
+          'Authorization': req.headers.authorization,
+          'Content-Type': 'application/json'
+        },
+        data: {
+          userIds: [...userIds]
+        }
+      });
+      users = authResponse.data.users || [];
+    } catch (authError) {
+      console.warn('⚠️ getUserTeamsByUserId: Could not fetch user data:', authError.message);
+    }
+
+    console.log('🔍 getUserTeamsByUserId: Fetched user data for', users.length, 'users');
+
+    // Create user lookup map
+    const userMap = {};
+    users.forEach(user => {
+      userMap[user._id] = user;
+    });
+
+    // Enrich teams with user data
+    const enrichedTeams = teams.map(team => {
+      const teamObj = team.toObject();
+      
+      // Enrich captain data
+      if (userMap[teamObj.captain]) {
+        teamObj.captainData = userMap[teamObj.captain];
+      }
+
+      // Enrich members data
+      if (teamObj.members && Array.isArray(teamObj.members)) {
+        teamObj.members = teamObj.members.map(member => {
+          if (member && member.user) {
+            const memberData = userMap[member.user];
+            return {
+              ...member,
+              userData: memberData
+            };
+          }
+          return member;
+        });
+      } else {
+        teamObj.members = [];
+      }
+
+      return teamObj;
+    });
+
+    console.log('✅ getUserTeamsByUserId: Returning', enrichedTeams.length, 'enriched teams');
+
+    res.status(200).json({
+      success: true,
+      teams: enrichedTeams
+    });
+  } catch (err) {
+    console.error('Error getting user teams by ID:', err);
+    res.status(500).json({ 
+      success: false,
+      error: err.message 
+    });
+  }
+};
+
 // Update team formation and player positions
 exports.updateTeamFormation = async (req, res) => {
   try {

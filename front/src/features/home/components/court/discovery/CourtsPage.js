@@ -5,9 +5,11 @@ import { useNavigate } from 'react-router-dom';
 import { getCourts } from '../../../../court/services/courtService';
 import { Container } from '../../../../../shared/ui/components/Container';
 import BookingCalendar from '../../../../booking/components/BookingCalendar';
+import { useToast, ToastContainer } from '../../../../../shared/ui/components/Toast';
 
 export default function CourtsPage() {
   const navigate = useNavigate();
+  const { success, toasts, removeToast } = useToast();
   const [courts, setCourts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -73,8 +75,8 @@ export default function CourtsPage() {
   const handleBookingComplete = (booking) => {
     // Handle successful booking
     console.log('Booking completed:', booking);
-    // You could show a success message or redirect
-    alert('Booking created successfully! You will receive a confirmation email.');
+    // Show success toast instead of alert
+    success('Booking created successfully! You will receive a confirmation email.');
   };
 
   if (loading) {
@@ -373,6 +375,9 @@ export default function CourtsPage() {
         }}
         onBookingComplete={handleBookingComplete}
       />
+      
+      {/* Toast notifications */}
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   );
 }
