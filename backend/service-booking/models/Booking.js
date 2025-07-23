@@ -1,366 +1,1197 @@
+const express = require('express');
+const router = express.Router();
+const moment = require('moment');
 const mongoose = require('mongoose');
+const axios = require('axios');
+const Booking = require('../models/Booking');
+const CalendarConfig = require('../models/CalendarConfig');
+const { verifyToken, verifyUser, validateBookingAccess } = require('../middleware/auth');
+const { sendManagerNotification } = require('../services/emailService');
+const { createBookingNotification } = require('../services/notificationService');
 
-const bookingSchema = new mongoose.Schema({
-  courtId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    ref: 'Court' // Reference to court service
-  },
-  companyId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    ref: 'Company' // Reference to company service
-  },
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    ref: 'User' // Reference to user/auth service
-  },
-  // Team booking support
-  teamId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Team', // Reference to team if this is a team booking
-    default: null
-  },
-  bookingType: {
-    type: String,
-    enum: ['individual', 'team'],
-    default: 'individual'
-  },
-  date: {
-    type: Date,
-    required: true
-  },
-  startTime: {
-    type: String,
-    required: true,
-    match: /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/ // HH:MM format
-  },
-  endTime: {
-    type: String,
-    required: true,
-    match: /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/ // HH:MM format
-  },
-  duration: {
-    type: Number,
-    required: true, // Duration in minutes
-    min: 30,
-    max: 240
-  },
-  status: {
-    type: String,
-    enum: ['pending', 'confirmed', 'cancelled', 'completed'],
-    default: 'pending'
-  },
-  players: [{
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    name: String,
-    email: String,
-    confirmed: {
-      type: Boolean,
-      default: false
-    }
-  }],
-  teamSize: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 22
-  },
-  totalPrice: {
-    type: Number,
-    required: true,
-    min: 0
-  },
-  pricePerHour: {
-    type: Number,
-    required: false,
-    default: 0,
-    min: 0
-  },
-  paymentStatus: {
-    type: String,
-    enum: ['pending', 'paid', 'failed', 'refunded'],
-    default: 'pending'
-  },
-  paymentMethod: {
-    type: String,
-    enum: ['cash', 'card', 'online', 'bank_transfer'],
-    default: 'cash'
-  },
-  notes: {
-    type: String,
-    maxlength: 500
-  },
-  cancellationReason: {
-    type: String,
-    maxlength: 200
-  },
-  // Court and company details (cached for faster queries)
-  courtDetails: mongoose.Schema.Types.Mixed,
-  companyDetails: mongoose.Schema.Types.Mixed,
-  userDetails: mongoose.Schema.Types.Mixed,
-  // Team details (cached for team bookings)
-  teamDetails: mongoose.Schema.Types.Mixed,
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-}, {
-  timestamps: true
-});
+// Service URLs
+const COURT_SERVICE_URL = process.env.COURT_SERVICE_URL || 'http://localhost:5003';
+const COMPANY_SERVICE_URL = process.env.COMPANY_SERVICE_URL || 'http://localhost:5001';
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5000';
+const TEAM_SERVICE_URL = process.env.TEAM_SERVICE_URL || 'http://localhost:5004';
+const EMAIL_SERVICE_URL = process.env.EMAIL_SERVICE_URL || 'http://localhost:5002';
 
-// Indexes for better query performance
-bookingSchema.index({ courtId: 1, date: 1, startTime: 1 });
-bookingSchema.index({ companyId: 1, date: 1 });
-bookingSchema.index({ userId: 1, date: 1 });
-bookingSchema.index({ status: 1 });
-bookingSchema.index({ date: 1, startTime: 1, endTime: 1 });
-
-// Virtual for formatted date
-bookingSchema.virtual('formattedDate').get(function() {
-  return this.date.toLocaleDateString();
-});
-
-// Virtual for booking duration in hours
-bookingSchema.virtual('durationHours').get(function() {
-  return this.duration / 60;
-});
-
-// Pre-save middleware to update updatedAt
-bookingSchema.pre('save', function(next) {
-  this.updatedAt = new Date();
-  next();
-});
-
-// Method to check if booking conflicts with another booking
-bookingSchema.methods.hasConflict = async function(courtId, date, startTime, endTime) {
-  const conflictingBooking = await this.constructor.findOne({
-    courtId: courtId,
-    date: date,
-    status: { $in: ['pending', 'confirmed'] },
-    $or: [
-      {
-        startTime: { $lt: endTime },
-        endTime: { $gt: startTime }
-      }
-    ]
+// TEST ROUTE - NO AUTH REQUIRED (TEMPORARY)
+router.get('/test-slots/:courtId', async (req, res) => {
+  res.json({
+    success: true,
+    message: 'Test route working',
+    courtId: req.params.courtId,
+    date: req.query.date,
+    timestamp: new Date().toISOString()
   });
-  
-  return !!conflictingBooking;
-};
+});
 
-// Static method to get available time slots for a court on a specific date
-bookingSchema.statics.getAvailableSlots = async function(courtId, date, workingHours = { start: '04:00', end: '23:30' }, matchDuration = 90) {
-  // Create date range for the entire day to catch all bookings for that date
-  const searchDate = new Date(date);
-  const startOfDay = new Date(searchDate);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(searchDate);
-  endOfDay.setHours(23, 59, 59, 999);
-  
-  const existingBookings = await this.find({
-    courtId: courtId,
-    date: {
-      $gte: startOfDay,
-      $lte: endOfDay
-    },
-    status: 'confirmed' // Only check confirmed bookings since we removed pending status
-  }).sort({ startTime: 1 });
-  
-  // Only log if there are bookings to help debug conflicts
-  if (existingBookings.length > 0) {
-    console.log(`📋 ${existingBookings.length} existing bookings found for ${searchDate.toDateString()}`);
-  }
+// @route   GET /api/bookings/available-slots/:courtId
+// @desc    Get available time slots for a court on a specific date
+// @access  Public (temporarily disabled auth for debugging)
+router.get('/available-slots/:courtId', async (req, res) => {
+  try {
+    const { courtId } = req.params;
+    const { date } = req.query;
 
-  // Check if the selected date is today
-  const today = new Date();
-  const selectedDate = new Date(date);
-  const isToday = selectedDate.toDateString() === today.toDateString();
-  
-  // Get current time in minutes for filtering past slots
-  const currentHour = today.getHours();
-  const currentMinute = today.getMinutes();
-  const currentTimeInMinutes = currentHour * 60 + currentMinute;
-
-  // Generate all possible time slots using the court's match duration
-  const slots = [];
-  let slotHour = parseInt(workingHours.start.split(':')[0]);
-  let slotMinute = parseInt(workingHours.start.split(':')[1]);
-  const endHour = parseInt(workingHours.end.split(':')[0]);
-  const endMinute = parseInt(workingHours.end.split(':')[1]);
-
-  while (slotHour < endHour || (slotHour === endHour && slotMinute <= endMinute)) {
-    const timeSlot = `${slotHour.toString().padStart(2, '0')}:${slotMinute.toString().padStart(2, '0')}`;
-    
-    // Calculate the end time for this slot to check if it fits within working hours
-    let slotEndHour = slotHour;
-    let slotEndMinute = slotMinute + matchDuration;
-    
-    while (slotEndMinute >= 60) {
-      slotEndHour += 1;
-      slotEndMinute -= 60;
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Date is required'
+      });
     }
+
+    // Get court details
+    const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+    if (!courtResponse.data.success) {
+      return res.status(404).json({
+        success: false,
+        message: 'Court not found'
+      });
+    }
+
+    const court = courtResponse.data.court;
+    const matchDuration = court.matchTime || 60; // Default 60 minutes
+
+    // Get calendar configuration
+    let calendarConfig = await CalendarConfig.findOne({ courtId });
+    if (!calendarConfig) {
+      return res.status(404).json({
+        success: false,
+        message: 'Calendar configuration not found'
+      });
+    }
+
+    // Get working hours for the date
+    const selectedDate = moment(date);
+    const dayOfWeek = selectedDate.format('dddd').toLowerCase();
+    const workingHours = calendarConfig.getWorkingHoursForDay(dayOfWeek);
+
+    if (!workingHours || !workingHours.isOpen) {
+      return res.json({
+        success: true,
+        availableSlots: [],
+        message: 'Court is closed on this day'
+      });
+    }
+
+    // Get only available slots (booked slots are filtered out)
+    const availableSlots = await Booking.getAvailableSlots(courtId, new Date(date), workingHours, matchDuration);
     
-    // Only add slot if it ends within working hours
-    if (slotEndHour < endHour || (slotEndHour === endHour && slotEndMinute <= endMinute)) {
-      // If it's today, only show slots that haven't started yet (add 30 minute buffer)
-      if (isToday) {
-        const slotStartTimeInMinutes = slotHour * 60 + slotMinute;
-        const timeBuffer = 30; // 30 minute buffer - can't book slots starting within 30 minutes
+    // Calculate price using court configuration
+    const totalPrice = calendarConfig.calculatePrice(bookingDate, startTime, endTime, court);
+
+    // Format slots with pricing
+    const slotsWithPricing = availableSlots.map(slot => {
+      const startMoment = moment(slot, 'HH:mm');
+      const endMoment = startMoment.clone().add(matchDuration, 'minutes');
+      const endTime = endMoment.format('HH:mm');
+      
+      // Calculate actual price for this slot using court configuration
+      const slotPrice = calendarConfig.calculatePrice(new Date(date), slot, endTime, court);
+      
+      return {
+        time: slot,
+        startTime: slot,
+        endTime: endTime,
+        duration: matchDuration,
+        durationLabel: `${matchDuration}min`,
+        price: slotPrice,
+        priceLabel: `${slotPrice} DT`
+      };
+    });
+
+    res.json({
+      success: true,
+      availableSlots: slotsWithPricing,
+      court: {
+        name: court.name,
+        type: court.type,
+        matchTime: court.matchTime || matchDuration
+      },
+      date,
+      workingHours,
+      matchDuration,
+      message: `Found ${slotsWithPricing.length} available time slots (booked slots are hidden)`
+    });
+  } catch (error) {
+    console.error('Get available slots error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get available slots',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/bookings
+// @desc    Get all bookings for user
+// @access  Private
+router.get('/', verifyToken, verifyUser, async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, courtId, date } = req.query;
+    const query = { userId: req.user.userId };
+
+    if (status) query.status = status;
+    if (courtId) query.courtId = courtId;
+    if (date) {
+      const startDate = new Date(date);
+      const endDate = new Date(date);
+      endDate.setDate(endDate.getDate() + 1);
+      query.date = { $gte: startDate, $lt: endDate };
+    }
+
+    const bookings = await Booking.find(query)
+      .sort({ date: -1, startTime: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Booking.countDocuments(query);
+
+    res.json({
+      success: true,
+      bookings,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      total
+    });
+  } catch (error) {
+    console.error('Get bookings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch bookings',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/bookings/company/:companyId
+// @desc    Get all bookings for a company
+// @access  Private (Company Manager)
+router.get('/company/:companyId', verifyToken, verifyUser, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { page = 1, limit = 20, status, courtId, date } = req.query;
+    
+    // Verify company access
+    const token = req.header('Authorization');
+    const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${companyId}`, {
+      headers: { Authorization: token }
+    });
+
+    // Company service returns the company object directly, not in a success wrapper
+    const company = companyResponse.data.success ? companyResponse.data.company : companyResponse.data;
+    if (!company || company.ownerId !== req.user.userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Not a company manager.'
+      });
+    }
+
+    const query = { companyId };
+    if (status) query.status = status;
+    if (courtId) query.courtId = courtId;
+    if (date) {
+      const startDate = new Date(date);
+      const endDate = new Date(date);
+      endDate.setDate(endDate.getDate() + 1);
+      query.date = { $gte: startDate, $lt: endDate };
+    }
+
+    const bookings = await Booking.find(query)
+      .sort({ date: -1, startTime: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Booking.countDocuments(query);
+
+    res.json({
+      success: true,
+      bookings,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      total
+    });
+  } catch (error) {
+    console.error('Get company bookings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch company bookings',
+      error: error.message
+    });
+  }
+});
+
+// @route   POST /api/bookings
+// @desc    Create a new booking
+// @access  Private
+router.post('/', verifyToken, verifyUser, async (req, res) => {
+  try {
+    const {
+      courtId,
+      date,
+      startTime,
+      teamSize,
+      players = [],
+      notes
+    } = req.body;
+
+    // Validate required fields
+    if (!courtId || !date || !startTime || !teamSize) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields'
+      });
+    }
+
+    // Get court details
+    const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+    if (!courtResponse.data.success) {
+      return res.status(404).json({
+        success: false,
+        message: 'Court not found'
+      });
+    }
+
+    const court = courtResponse.data.court;
+    const companyId = court.companyId;
+    
+    // Use court's predefined match duration - players cannot modify this
+    const matchDuration = court.matchTime; // This is set by the manager
+    
+    // Calculate end time based on court's match duration
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const startTotalMinutes = startHour * 60 + startMin;
+    const endTotalMinutes = startTotalMinutes + matchDuration;
+    const endHour = Math.floor(endTotalMinutes / 60);
+    const endMin = endTotalMinutes % 60;
+    const endTime = `${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
+
+    // Get company details
+    const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${companyId}`);
+    if (!companyResponse.data.success) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const company = companyResponse.data.company;
+
+    // Get manager/owner details from auth service using ownerId
+    let managerEmail = null;
+    let managerName = null;
+    let managerPhone = null;
+    
+    if (company.ownerId) {
+      try {
+        console.log('🔍 Fetching manager details for ownerId:', company.ownerId);
         
-        if (slotStartTimeInMinutes > currentTimeInMinutes + timeBuffer) {
-          slots.push(timeSlot);
+        // Use the correct endpoint and headers based on the auth service
+        const managerResponse = await axios.get(`${AUTH_SERVICE_URL}/api/auth/user/${company.ownerId}`, {
+          headers: { 
+            'x-auth-token': req.header('Authorization')?.replace('Bearer ', '') // Convert Bearer token to x-auth-token
+          }
+        });
+        
+        console.log('👤 Manager response:', managerResponse.status, JSON.stringify(managerResponse.data, null, 2));
+        
+        if (managerResponse.data.success && managerResponse.data.user) {
+          const manager = managerResponse.data.user;
+          managerEmail = manager.email;
+          managerName = manager.fullName || manager.companyName;
+          managerPhone = manager.phoneNumber;
+          console.log('✅ Manager details found:', { 
+            email: managerEmail, 
+            name: managerName, 
+            phone: managerPhone,
+            role: manager.role
+          });
+        } else {
+          console.log('❌ Manager data not found in response:', managerResponse.data);
         }
-        // Skip past slots
-      } else {
-        // For future dates, add all slots within working hours
-        slots.push(timeSlot);
+      } catch (managerError) {
+        console.error('⚠️ Could not fetch manager details:', managerError.message);
+        console.error('⚠️ Error details:', {
+          status: managerError.response?.status,
+          statusText: managerError.response?.statusText,
+          data: managerError.response?.data
+        });
+        console.log('⚠️ Will proceed without manager email - booking will still be created');
       }
     } else {
-      break; // Stop if next slot would exceed working hours
+      console.log('⚠️ No ownerId found in company data');
     }
-    
-    slotMinute += matchDuration; // Use court's match duration instead of hardcoded 90
-    while (slotMinute >= 60) {
-      slotHour += 1;
-      slotMinute -= 60;
-    }
-    
-    // Break if we've exceeded the end time
-    if (slotHour > endHour || (slotHour === endHour && slotMinute > endMinute)) {
-      break;
-    }
-    
-    // Prevent infinite loop
-    if (slotHour >= 24) {
-      break;
-    }
-  }
-  
-  // Only log potential slots if there are existing bookings to help debug conflicts
-  if (existingBookings.length > 0) {
-    console.log(`🎯 Generated ${slots.length} potential slots:`, slots);
-  }
 
-  // Filter out booked slots - check if any booking conflicts with the time slot
-  const availableSlots = slots.filter(slot => {
-    // Calculate end time for this slot
-    const [slotHour, slotMin] = slot.split(':').map(Number);
-    const slotStartMinutes = slotHour * 60 + slotMin;
-    const slotEndMinutes = slotStartMinutes + matchDuration;
-    const slotEndHour = Math.floor(slotEndMinutes / 60);
-    const slotEndMin = slotEndMinutes % 60;
-    const slotEndTime = `${slotEndHour.toString().padStart(2, '0')}:${slotEndMin.toString().padStart(2, '0')}`;
+    // Get calendar configuration
+    let calendarConfig = await CalendarConfig.findOne({ courtId });
+    if (!calendarConfig) {
+      // Create default calendar config if not exists
+      calendarConfig = new CalendarConfig({
+        courtId,
+        companyId,
+        courtDetails: {
+          name: court.name,
+          type: court.type,
+          maxPlayersPerTeam: court.maxPlayersPerTeam
+        },
+        companyDetails: {
+          companyName: company.companyName,
+          managerEmail: managerEmail
+        }
+      });
+      await calendarConfig.save();
+    }
+
+    // Validate booking date
+    const bookingDate = new Date(date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (bookingDate < today) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot book for past dates'
+      });
+    }
+
+    const maxAdvanceDate = new Date();
+    maxAdvanceDate.setDate(maxAdvanceDate.getDate() + calendarConfig.advanceBookingDays);
     
-    // Check if this slot conflicts with any existing booking
-    const isConflicting = existingBookings.some(booking => {
-      // Convert booking times to minutes for easier comparison
+    if (bookingDate > maxAdvanceDate) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot book more than ${calendarConfig.advanceBookingDays} days in advance`
+      });
+    }
+
+    // Check if date is blocked
+    if (calendarConfig.isDateBlocked(bookingDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This date is not available for booking'
+      });
+    }
+
+    // Validate working hours
+    const dayName = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][bookingDate.getDay()];
+    const workingHours = calendarConfig.getWorkingHoursForDay(dayName);
+    
+    if (!workingHours || !workingHours.isOpen) {
+      return res.status(400).json({
+        success: false,
+        message: 'Court is closed on this day'
+      });
+    }
+
+    if (startTime < workingHours.start || endTime > workingHours.end) {
+      return res.status(400).json({
+        success: false,
+        message: `Court is only open from ${workingHours.start} to ${workingHours.end}`
+      });
+    }
+
+    // Calculate duration - use court's predefined match duration
+    const duration = matchDuration; // Set by manager, not modifiable by players
+
+    // Validate that the booking doesn't exceed court working hours
+    if (endHour >= 24 || (endHour === 23 && endMin > 30)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Booking would extend beyond valid hours (23:30)'
+      });
+    }
+
+    // Check if player already has a booking at the same time on ANY court
+    console.log(`🔍 Checking if player ${req.user.userId} has conflicting bookings on ${bookingDate.toDateString()}`);
+    console.log(`🕐 Requested time slot: ${startTime} - ${endTime}`);
+
+    const playerExistingBookings = await Booking.find({
+      userId: req.user.userId,
+      date: {
+        $gte: startOfDay,
+        $lte: endOfDay
+      },
+      status: 'confirmed'
+    }).sort({ startTime: 1 });
+
+    console.log(`📋 Found ${playerExistingBookings.length} existing bookings for this player on this date`);
+
+    if (playerExistingBookings.length > 0) {
+      // Check for time conflicts with player's existing bookings
+      const [requestedStartHour, requestedStartMin] = startTime.split(':').map(Number);
+      const [requestedEndHour, requestedEndMin] = endTime.split(':').map(Number);
+      const requestedStartMinutes = requestedStartHour * 60 + requestedStartMin;
+      const requestedEndMinutes = requestedEndHour * 60 + requestedEndMin;
+
+      const conflictingPlayerBooking = playerExistingBookings.find(booking => {
+        const [bookingStartHour, bookingStartMin] = booking.startTime.split(':').map(Number);
+        const [bookingEndHour, bookingEndMin] = booking.endTime.split(':').map(Number);
+        const bookingStartMinutes = bookingStartHour * 60 + bookingStartMin;
+        const bookingEndMinutes = bookingEndHour * 60 + bookingEndMin;
+
+        // Check for any time overlap
+        const hasOverlap = requestedStartMinutes < bookingEndMinutes && requestedEndMinutes > bookingStartMinutes;
+        
+        if (hasOverlap) {
+          console.log(`❌ Player booking conflict detected:`);
+          console.log(`   Existing: ${booking.startTime} - ${booking.endTime} (Court: ${booking.courtDetails?.name || booking.courtId})`);
+          console.log(`   Requested: ${startTime} - ${endTime} (Court: ${court.name})`);
+        }
+        
+        return hasOverlap;
+      });
+
+      if (conflictingPlayerBooking) {
+        return res.status(409).json({
+          success: false,
+          message: `You already have a booking at ${conflictingPlayerBooking.startTime} - ${conflictingPlayerBooking.endTime} on ${conflictingPlayerBooking.courtDetails?.name || 'another court'}. Players can only book one court at a time.`,
+          conflictingBooking: {
+            courtName: conflictingPlayerBooking.courtDetails?.name || 'Unknown Court',
+            startTime: conflictingPlayerBooking.startTime,
+            endTime: conflictingPlayerBooking.endTime,
+            bookingId: conflictingPlayerBooking._id
+          }
+        });
+      }
+    }
+
+    // Check for conflicts with proper date range search and overlap detection
+    const startOfDay = new Date(bookingDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(bookingDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    console.log(`🔍 Checking individual booking conflicts for court ${courtId} on ${bookingDate.toDateString()}`);
+    console.log(`🕐 Requested time slot: ${startTime} - ${endTime}`);
+
+    const existingBookings = await Booking.find({
+      courtId,
+      date: {
+        $gte: startOfDay,
+        $lte: endOfDay
+      },
+      status: 'confirmed'
+    }).sort({ startTime: 1 });
+
+    console.log(`📋 Found ${existingBookings.length} existing bookings for this date:`, 
+      existingBookings.map(b => ({ 
+        date: b.date, 
+        startTime: b.startTime, 
+        endTime: b.endTime, 
+        status: b.status 
+      }))
+    );
+
+    // Check for time conflicts using the same logic as getAvailableSlots
+    const [requestedStartHour, requestedStartMin] = startTime.split(':').map(Number);
+    const [requestedEndHour, requestedEndMin] = endTime.split(':').map(Number);
+    const requestedStartMinutes = requestedStartHour * 60 + requestedStartMin;
+    const requestedEndMinutes = requestedEndHour * 60 + requestedEndMin;
+
+    const conflictingBooking = existingBookings.find(booking => {
       const [bookingStartHour, bookingStartMin] = booking.startTime.split(':').map(Number);
       const [bookingEndHour, bookingEndMin] = booking.endTime.split(':').map(Number);
       const bookingStartMinutes = bookingStartHour * 60 + bookingStartMin;
       const bookingEndMinutes = bookingEndHour * 60 + bookingEndMin;
       
-      // Check for overlap: slot conflicts with booking if they overlap
-      const hasOverlap = (slotStartMinutes < bookingEndMinutes && slotEndMinutes > bookingStartMinutes);
+      // Check for overlap: requested slot conflicts with existing booking if they overlap
+      const hasOverlap = (requestedStartMinutes < bookingEndMinutes && requestedEndMinutes > bookingStartMinutes);
       
       if (hasOverlap) {
-        console.log(`❌ Slot ${slot}-${slotEndTime} conflicts with booking ${booking.startTime}-${booking.endTime}`);
+        console.log(`❌ Individual booking conflict detected: ${startTime}-${endTime} overlaps with existing booking ${booking.startTime}-${booking.endTime}`);
       }
       
       return hasOverlap;
     });
-    
-    return !isConflicting;
-  });
 
-  // Only log final slots when there are conflicts to help debug
-  if (existingBookings.length > 0) {
-    console.log(`🏆 Final available slots: ${availableSlots.length} slots:`, availableSlots);
-  }
-  
-  return availableSlots;
-};
-
-// Static method to get all time slots with booking status (available/booked)
-bookingSchema.statics.getAllSlotsWithStatus = async function(courtId, date, workingHours = { start: '04:00', end: '23:30' }, matchDuration = 90) {
-  const existingBookings = await this.find({
-    courtId: courtId,
-    date: date,
-    status: { $in: ['pending', 'confirmed'] }
-  }).sort({ startTime: 1 });
-
-  // Generate all possible time slots
-  const slots = [];
-  let currentHour = parseInt(workingHours.start.split(':')[0]);
-  let currentMinute = parseInt(workingHours.start.split(':')[1]);
-  const endHour = parseInt(workingHours.end.split(':')[0]);
-  const endMinute = parseInt(workingHours.end.split(':')[1]);
-
-  while (currentHour < endHour || (currentHour === endHour && currentMinute <= endMinute)) {
-    const timeSlot = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
-    
-    // Calculate the end time for this slot
-    let slotEndHour = currentHour;
-    let slotEndMinute = currentMinute + matchDuration;
-    
-    while (slotEndMinute >= 60) {
-      slotEndHour += 1;
-      slotEndMinute -= 60;
+    if (conflictingBooking) {
+      console.log(`🚫 Individual booking rejected due to conflict with booking at ${conflictingBooking.startTime}-${conflictingBooking.endTime}`);
+      return res.status(409).json({
+        success: false,
+        message: 'This time slot has just been booked by another user. Please refresh and select a different time.'
+      });
     }
-    
-    const endTimeSlot = `${slotEndHour.toString().padStart(2, '0')}:${slotEndMinute.toString().padStart(2, '0')}`;
-    
-    // Only add slot if it ends within working hours
-    if (slotEndHour < endHour || (slotEndHour === endHour && slotEndMinute <= endMinute)) {
-      // Check if this slot is booked
-      const booking = existingBookings.find(booking => {
-        return timeSlot >= booking.startTime && timeSlot < booking.endTime;
-      });
-      
-      slots.push({
-        startTime: timeSlot,
-        endTime: endTimeSlot,
-        duration: matchDuration,
-        isAvailable: !booking,
-        isBooked: !!booking,
-        booking: booking ? {
-          id: booking._id,
-          status: booking.status,
-          teamName: booking.teamDetails?.teamName,
-          playerName: booking.userDetails?.name,
-          teamSize: booking.teamSize
-        } : null
-      });
+
+    console.log(`✅ No conflicts found - individual booking can proceed for ${startTime}-${endTime}`);
+
+    // Calculate price using court configuration
+    const totalPrice = calendarConfig.calculatePrice(bookingDate, startTime, endTime, court);
+
+    console.log('💰 Price calculation debug:');
+    console.log('  - Court base price (pricePerHour):', court.pricePerHour);
+    console.log('  - Calendar base price fallback:', calendarConfig.pricing.basePrice);
+    console.log('  - Max players per team:', court.maxPlayersPerTeam);
+    console.log('  - Total players (2 teams):', (court.maxPlayersPerTeam || 6) * 2);
+    console.log('  - Final total price:', totalPrice);
+
+    // Create booking
+    const booking = new Booking({
+      courtId,
+      companyId,
+      userId: req.user.userId,
+      date: bookingDate,
+      startTime,
+      endTime,
+      duration,
+      teamSize,
+      players,
+      totalPrice,
+      notes,
+      status: 'confirmed', // Always confirmed, no pending approval needed
+      courtDetails: {
+        name: court.name,
+        type: court.type,
+        address: court.location?.address,
+        city: court.location?.city
+      },
+      companyDetails: {
+        companyName: company.companyName,
+        managerName: managerName,
+        managerEmail: managerEmail,
+        managerPhone: managerPhone
+      },
+      userDetails: {
+        name: req.user.name,
+        email: req.user.email,
+        phone: req.user.phone
+      }
+    });
+
+    await booking.save();
+
+    // Send notification email to court manager
+    if (managerEmail) {
+      try {
+        const managerEmailDetails = {
+          courtName: court.name,
+          companyName: company.companyName,
+          teamName: null, // Individual booking, no team
+          playerName: req.user.name || req.user.fullName,
+          playerEmail: req.user.email,
+          date: booking.date,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          duration: booking.duration,
+          totalPrice: booking.totalPrice,
+          bookingId: booking._id,
+          teamSize: teamSize
+        };
+
+        console.log('📧 Sending manager notification email to:', managerEmail);
+        await sendManagerNotification(managerEmail, managerEmailDetails);
+        console.log('✅ Manager notification email sent successfully');
+      } catch (emailError) {
+        console.error('❌ Failed to send manager notification email:', emailError.message);
+        // Don't fail the booking if email fails - just log the error
+      }
     } else {
-      break; // Stop if next slot would exceed working hours
+      console.log('⚠️ No manager email found - skipping manager notification');
+      console.log('📝 Company details:', {
+        companyName: company.companyName,
+        ownerId: company.ownerId,
+        ownerRole: company.ownerRole
+      });
     }
-    
-    currentMinute += matchDuration;
-    while (currentMinute >= 60) {
-      currentHour += 1;
-      currentMinute -= 60;
+
+    // Create popup notification for manager
+    if (company.ownerId) {
+      try {
+        await createBookingNotification(
+          company.ownerId,
+          {
+            userId: req.user.userId,
+            name: req.user.name || req.user.fullName
+          },
+          {
+            booking,
+            court,
+            company
+          }
+        );
+        console.log('✅ Popup notification created for manager');
+      } catch (notificationError) {
+        console.error('❌ Failed to create popup notification:', notificationError.message);
+        // Don't fail the booking if notification fails - just log the error
+      }
     }
-    
-    // Break if we've exceeded the end time
-    if (currentHour > endHour || (currentHour === endHour && currentMinute > endMinute)) {
-      break;
-    }
-    
-    // Prevent infinite loop
-    if (currentHour >= 24) {
-      break;
-    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Booking created successfully',
+      booking
+    });
+  } catch (error) {
+    console.error('Create booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create booking',
+      error: error.message
+    });
   }
+});
 
-  return slots;
-};
+// @route   PUT /api/bookings/:bookingId/status
+// @desc    Update booking status (for company managers)
+// @access  Private
+router.put('/:bookingId/status', verifyToken, verifyUser, validateBookingAccess, async (req, res) => {
+  try {
+    const { status, cancellationReason } = req.body;
+    const booking = req.booking;
 
-module.exports = mongoose.model('Booking', bookingSchema);
+    if (!['confirmed', 'cancelled', 'completed'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Valid statuses: confirmed, cancelled, completed'
+      });
+    }
+
+    if (status === 'cancelled' && !cancellationReason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cancellation reason is required'
+      });
+    }
+
+    booking.status = status;
+    if (cancellationReason) {
+      booking.cancellationReason = cancellationReason;
+    }
+
+    await booking.save();
+
+    res.json({
+      success: true,
+      message: 'Booking status updated successfully',
+      booking
+    });
+  } catch (error) {
+    console.error('Update booking status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update booking status',
+      error: error.message
+    });
+  }
+});
+
+// @route   DELETE /api/bookings/:bookingId
+// @desc    Cancel/Delete booking (must be at least 12 hours before booking time)
+// @access  Private
+router.delete('/:bookingId', verifyToken, verifyUser, validateBookingAccess, async (req, res) => {
+  try {
+    const booking = req.booking;
+    const { reason } = req.body;
+
+    // Enforce 12-hour cancellation policy
+    const bookingDateTime = new Date(`${booking.date.toDateString()} ${booking.startTime}`);
+    const now = new Date();
+    const hoursUntilBooking = (bookingDateTime - now) / (1000 * 60 * 60);
+
+    if (hoursUntilBooking < 12) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cancellation must be done at least 12 hours before the booking time'
+      });
+    }
+
+    booking.status = 'cancelled';
+    booking.cancellationReason = reason || 'Cancelled by user';
+    await booking.save();
+
+    res.json({
+      success: true,
+      message: 'Booking cancelled successfully',
+      booking
+    });
+  } catch (error) {
+    console.error('Cancel booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel booking',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/bookings/:bookingId
+// @desc    Get booking details
+// @access  Private
+router.get('/:bookingId', verifyToken, verifyUser, validateBookingAccess, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      booking: req.booking
+    });
+  } catch (error) {
+    console.error('Get booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch booking',
+      error: error.message
+    });
+  }
+});
+
+// @route   POST /api/bookings/team_booking
+// @desc    Create a new team booking
+// @access  Private
+router.post('/team_booking', verifyToken, verifyUser, async (req, res) => {
+  try {
+    const {
+      courtId,
+      date,
+      startTime,
+      teamId,
+      notes
+    } = req.body;
+
+    // Validate required fields
+    if (!courtId || !date || !startTime || !teamId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields'
+      });
+    }
+
+    // Get court details
+    const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+    if (!courtResponse.data.success) {
+      return res.status(404).json({
+        success: false,
+        message: 'Court not found'
+      });
+    }
+
+    const court = courtResponse.data.court;
+    const companyId = court.companyId;
+    
+    // Use court's predefined match duration
+    const matchDuration = court.matchTime;
+    
+    // Calculate end time based on court's match duration
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const startTotalMinutes = startHour * 60 + startMin;
+    const endTotalMinutes = startTotalMinutes + matchDuration;
+    const endHour = Math.floor(endTotalMinutes / 60);
+    const endMin = endTotalMinutes % 60;
+    const endTime = `${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
+
+    // Get team details
+    console.log('🏆 Fetching team details for teamId:', teamId);
+    const teamResponse = await axios.get(`${TEAM_SERVICE_URL}/api/teams/${teamId}`, {
+      headers: { Authorization: req.header('Authorization') }
+    });
+
+    if (!teamResponse.data.success) {
+      return res.status(404).json({
+        success: false,
+        message: 'Team not found'
+      });
+    }
+
+    const team = teamResponse.data.team;
+    console.log('🏆 Team found:', team.name, 'with', team.players?.length || 0, 'players');
+
+    // Get company details
+    let companyDetails;
+    let managerEmail = '';
+    let managerName = '';
+    let managerPhone = '';
+
+    try {
+      console.log('🏢 Fetching company details for companyId:', companyId);
+      const companyResponse = await axios.get(`${COMPANY_SERVICE_URL}/api/companies/${companyId}`);
+      
+      if (!companyResponse.data.success) {
+        return res.status(404).json({
+          success: false,
+          message: 'Company not found'
+        });
+      }
+      companyDetails = companyResponse.data;
+      
+      // Get manager/owner details from auth service using ownerId
+      if (companyDetails.ownerId) {
+        try {
+          console.log('🔍 Fetching manager details for ownerId:', companyDetails.ownerId);
+          
+          const managerResponse = await axios.get(`${AUTH_SERVICE_URL}/api/auth/user/${companyDetails.ownerId}`, {
+            headers: { 
+              'x-auth-token': req.header('Authorization')?.replace('Bearer ', '')
+            }
+          });
+          
+          console.log('👤 Manager response:', managerResponse.status, JSON.stringify(managerResponse.data, null, 2));
+          
+          if (managerResponse.data.success && managerResponse.data.user) {
+            const manager = managerResponse.data.user;
+            managerEmail = manager.email;
+            managerName = manager.fullName || manager.companyName;
+            managerPhone = manager.phoneNumber;
+            console.log('✅ Team booking - Manager details found:', { 
+              email: managerEmail, 
+              name: managerName, 
+              phone: managerPhone 
+            });
+          }
+        } catch (managerError) {
+          console.error('⚠️ Could not fetch manager details for team booking:', managerError.message);
+        }
+      }
+    } catch (error) {
+      console.error('Company fetch error:', error.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch company details',
+        error: error.message
+      });
+    }
+
+    // Get calendar configuration
+    let calendarConfig = await CalendarConfig.findOne({ courtId });
+    if (!calendarConfig) {
+      calendarConfig = new CalendarConfig({
+        courtId,
+        companyId,
+        courtDetails: {
+          name: court.name,
+          type: court.type,
+          maxPlayersPerTeam: court.maxPlayersPerTeam
+        },
+        companyDetails: {
+          companyName: companyDetails.companyName,
+          managerEmail: managerEmail
+        }
+      });
+      await calendarConfig.save();
+    }
+
+    // Validate booking date
+    const bookingDate = new Date(date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (bookingDate < today) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot book for past dates'
+      });
+    }
+
+    const maxAdvanceDate = new Date();
+    maxAdvanceDate.setDate(maxAdvanceDate.getDate() + calendarConfig.advanceBookingDays);
+    
+    if (bookingDate > maxAdvanceDate) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot book more than ${calendarConfig.advanceBookingDays} days in advance`
+      });
+    }
+
+    // Check for existing booking conflicts with proper date range search
+    const startOfDay = new Date(bookingDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(bookingDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    console.log(`🔍 Checking team booking conflicts for court ${courtId} on ${bookingDate.toDateString()}`);
+    console.log(`🕐 Requested time slot: ${startTime} - ${endTime}`);
+
+    const existingBookings = await Booking.find({
+      courtId,
+      date: {
+        $gte: startOfDay,
+        $lte: endOfDay
+      },
+      status: 'confirmed'
+    }).sort({ startTime: 1 });
+
+    console.log(`📋 Found ${existingBookings.length} existing bookings for this date:`, 
+      existingBookings.map(b => ({ 
+        date: b.date, 
+        startTime: b.startTime, 
+        endTime: b.endTime, 
+        status: b.status 
+      }))
+    );
+
+    // Check for time conflicts using the same logic as getAvailableSlots
+    const [requestedStartHour, requestedStartMin] = startTime.split(':').map(Number);
+    const [requestedEndHour, requestedEndMin] = endTime.split(':').map(Number);
+    const requestedStartMinutes = requestedStartHour * 60 + requestedStartMin;
+    const requestedEndMinutes = requestedEndHour * 60 + requestedEndMin;
+
+    const conflictingBooking = existingBookings.find(booking => {
+      const [bookingStartHour, bookingStartMin] = booking.startTime.split(':').map(Number);
+      const [bookingEndHour, bookingEndMin] = booking.endTime.split(':').map(Number);
+      const bookingStartMinutes = bookingStartHour * 60 + bookingStartMin;
+      const bookingEndMinutes = bookingEndHour * 60 + bookingEndMin;
+      
+      // Check for overlap: requested slot conflicts with existing booking if they overlap
+      const hasOverlap = (requestedStartMinutes < bookingEndMinutes && requestedEndMinutes > bookingStartMinutes);
+      
+      if (hasOverlap) {
+        console.log(`❌ Team booking conflict detected: ${startTime}-${endTime} overlaps with existing booking ${booking.startTime}-${booking.endTime}`);
+      }
+      
+      return hasOverlap;
+    });
+
+    if (conflictingBooking) {
+      console.log(`🚫 Team booking rejected due to conflict with booking at ${conflictingBooking.startTime}-${conflictingBooking.endTime}`);
+      return res.status(409).json({
+        success: false,
+        message: 'This time slot has just been booked by another user. Please refresh and select a different time.'
+      });
+    }
+
+    console.log(`✅ No conflicts found - team booking can proceed for ${startTime}-${endTime}`);
+
+    // Calculate price based on team size (base price × total players)
+    const teamSize = team.players?.length || 6; // Default to 6 if no players data
+    const pricePerHour = calendarConfig.pricing.basePrice;
+    const totalPrice = calendarConfig.calculatePrice(bookingDate, startTime, endTime, teamSize);
+
+    // Create team booking
+    const booking = new Booking({
+      userId: req.user.userId,
+      courtId,
+      companyId,
+      date: bookingDate,
+      startTime,
+      endTime,
+      matchDuration,
+      teamSize: teamSize,
+      players: team.players || [],
+      teamId: team._id,
+      teamName: team.name,
+      totalPrice,
+      pricePerHour,
+      notes,
+      status: 'confirmed'
+    });
+
+    const savedBooking = await booking.save();
+
+    // Send confirmation email to user
+    try {
+      console.log('📧 Sending booking confirmation email to user...');
+      const userEmailData = {
+        to: req.user.email,
+        type: 'booking_confirmation_team',
+        data: {
+          userName: req.user.fullName,
+          courtName: court.name,
+          date: bookingDate.toLocaleDateString(),
+          time: `${startTime} - ${endTime}`,
+          teamName: team.name,
+          playerCount: team.players?.length || 0,
+          bookingId: savedBooking._id
+        }
+      };
+
+      await axios.post(`${EMAIL_SERVICE_URL}/api/email/send`, userEmailData);
+      console.log('✅ User confirmation email sent successfully');
+    } catch (emailError) {
+      console.error('⚠️ Failed to send user confirmation email:', emailError.message);
+    }
+
+    // Send notification email to manager
+    if (managerEmail) {
+      try {
+        console.log('📧 Sending manager notification email to:', managerEmail);
+        const managerEmailData = {
+          to: managerEmail,
+          type: 'manager_booking_notification_team',
+          data: {
+            managerName: managerName,
+            courtName: court.name,
+            date: bookingDate.toLocaleDateString(),
+            time: `${startTime} - ${endTime}`,
+            teamName: team.name,
+            playerCount: team.players?.length || 0,
+            userEmail: req.user.email,
+            bookingId: savedBooking._id
+          }
+        };
+
+        await axios.post(`${EMAIL_SERVICE_URL}/api/email/send`, managerEmailData);
+        console.log('✅ Manager notification email sent successfully');
+      } catch (emailError) {
+        console.error('⚠️ Failed to send manager notification email:', emailError.message);
+      }
+    } else {
+      console.log('📧 Sending manager notification email to: undefined');
+      console.log('⚠️ No manager email available - skipping manager notification');
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Team booking created successfully',
+      booking: {
+        id: savedBooking._id,
+        courtId: savedBooking.courtId,
+        courtName: court.name,
+        date: savedBooking.date,
+        startTime: savedBooking.startTime,
+        endTime: savedBooking.endTime,
+        teamName: savedBooking.teamName,
+        playerCount: savedBooking.teamSize,
+        status: savedBooking.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Team booking error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create team booking',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/bookings/slots-with-status/:courtId/:date
+// @desc    Get all time slots with their booking status (available/booked) for visual calendar
+// @access  Public
+router.get('/slots-with-status/:courtId/:date', async (req, res) => {
+  try {
+    const { courtId, date } = req.params;
+
+    // Validate courtId
+    if (!courtId || !mongoose.Types.ObjectId.isValid(courtId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid court ID is required'
+      });
+    }
+
+    // Validate and parse date
+    const requestedDate = new Date(date);
+    if (isNaN(requestedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid date is required (YYYY-MM-DD format)'
+      });
+    }
+
+    // Get court details
+    let court;
+    let matchDuration = 90; // Default match duration
+    
+    try {
+      const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+      if (courtResponse.data.success) {
+        court = courtResponse.data.court;
+        matchDuration = court.matchTime || 90;
+      } else {
+        console.warn('Court service returned unsuccessful response, using defaults');
+        court = { _id: courtId, name: 'Court', type: 'football', matchTime: 90 };
+      }
+    } catch (courtError) {
+      console.warn('Court service unavailable, using default court settings:', courtError.message);
+      // Use default court settings if service is unavailable
+      court = { 
+        _id: courtId, 
+        name: 'Court', 
+        type: 'football', 
+        matchTime: 90,
+        pricePerHour: 15,
+        maxPlayersPerTeam: 6
+      };
+    }
+
+    // Get calendar configuration
+    let calendarConfig = await CalendarConfig.findOne({ courtId });
+    if (!calendarConfig) {
+      // Create a default calendar config with proper validation
+      calendarConfig = new CalendarConfig({
+        courtId,
+        companyId: court.companyId || new mongoose.Types.ObjectId(), // Generate valid ObjectId if not provided
+        courtDetails: {
+          name: court.name || 'Court',
+          type: court.type || 'football',
+          maxPlayersPerTeam: court.maxPlayersPerTeam || 6
+        },
+        workingHours: {
+          monday: { isOpen: true, start: '04:00', end: '23:30' },
+          tuesday: { isOpen: true, start: '04:00', end: '23:30' },
+          wednesday: { isOpen: true, start: '04:00', end: '23:30' },
+          thursday: { isOpen: true, start: '04:00', end: '23:30' },
+          friday: { isOpen: true, start: '04:00', end: '23:30' },
+          saturday: { isOpen: true, start: '04:00', end: '23:30' },
+          sunday: { isOpen: true, start: '04:00', end: '23:30' }
+        },
+        pricing: { basePrice: court.pricePerHour || 15 }
+      });
+      await calendarConfig.save();
+    }
+
+    // Get working hours for the requested day
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayOfWeek = dayNames[requestedDate.getDay()];
+    const workingHours = calendarConfig.getWorkingHoursForDay(dayOfWeek);
+
+    if (!workingHours.isOpen) {
+      return res.json({
+        success: true,
+        allSlots: [],
+        court: {
+          name: court.name,
+          type: court.type,
+          matchTime: matchDuration
+        },
+        date,
+        workingHours,
+        matchDuration,
+        message: `Court is closed on ${dayOfWeek}`
+      });
+    }
+
+    // Get all slots with their booking status
+    const allSlotsWithStatus = await Booking.getAllSlotsWithStatus(courtId, requestedDate, workingHours, matchDuration);
+
+    // Add pricing information to each slot
+    const slotsWithPricingAndStatus = allSlotsWithStatus.map(slot => {
+      const slotPrice = calendarConfig.calculatePrice(requestedDate, slot.startTime, slot.endTime, court);
+      
+      return {
+        ...slot,
+        price: slotPrice,
+        priceLabel: `${slotPrice} DT`,
+        durationLabel: `${matchDuration}min`,
+        status: slot.isBooked ? 'booked' : 'available',
+        style: slot.isBooked ? 'booked' : 'available', // For frontend styling
+        bookingDetails: slot.booking // Map booking info to bookingDetails for frontend
+      };
+    });
+
+    res.json({
+      success: true,
+      allSlots: slotsWithPricingAndStatus,
+      court: {
+        name: court.name,
+        type: court.type,
+        matchTime: matchDuration
+      },
+      date,
+      workingHours,
+      matchDuration,
+      availableCount: slotsWithPricingAndStatus.filter(slot => slot.isAvailable).length,
+      bookedCount: slotsWithPricingAndStatus.filter(slot => slot.isBooked).length,
+      message: `Court schedule for ${requestedDate.toDateString()}`
+    });
+
+  } catch (error) {
+    console.error('Get slots with status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get court schedule',
+      error: error.message
+    });
+  }
+});
+
+module.exports = router;

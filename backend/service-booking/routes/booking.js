@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const moment = require('moment');
+const mongoose = require('mongoose');
 const axios = require('axios');
 const Booking = require('../models/Booking');
 const CalendarConfig = require('../models/CalendarConfig');
@@ -1047,6 +1048,147 @@ router.post('/team_booking', verifyToken, verifyUser, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to create team booking',
+      error: error.message
+    });
+  }
+});
+
+// @route   GET /api/bookings/slots-with-status/:courtId/:date
+// @desc    Get all time slots with their booking status (available/booked) for visual calendar
+// @access  Public
+router.get('/slots-with-status/:courtId/:date', async (req, res) => {
+  try {
+    const { courtId, date } = req.params;
+
+    // Validate courtId
+    if (!courtId || !mongoose.Types.ObjectId.isValid(courtId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid court ID is required'
+      });
+    }
+
+    // Validate and parse date
+    const requestedDate = new Date(date);
+    if (isNaN(requestedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid date is required (YYYY-MM-DD format)'
+      });
+    }
+
+    // Get court details
+    let court;
+    let matchDuration = 90; // Default match duration
+    
+    try {
+      const courtResponse = await axios.get(`${COURT_SERVICE_URL}/api/courts/${courtId}`);
+      if (courtResponse.data.success) {
+        court = courtResponse.data.court;
+        matchDuration = court.matchTime || 90;
+      } else {
+        console.warn('Court service returned unsuccessful response, using defaults');
+        court = { _id: courtId, name: 'Court', type: 'football', matchTime: 90 };
+      }
+    } catch (courtError) {
+      console.warn('Court service unavailable, using default court settings:', courtError.message);
+      // Use default court settings if service is unavailable
+      court = { 
+        _id: courtId, 
+        name: 'Court', 
+        type: 'football', 
+        matchTime: 90,
+        pricePerHour: 15,
+        maxPlayersPerTeam: 6
+      };
+    }
+
+    // Get calendar configuration
+    let calendarConfig = await CalendarConfig.findOne({ courtId });
+    if (!calendarConfig) {
+      // Create a default calendar config with proper validation
+      calendarConfig = new CalendarConfig({
+        courtId,
+        companyId: court.companyId || new mongoose.Types.ObjectId(), // Generate valid ObjectId if not provided
+        courtDetails: {
+          name: court.name || 'Court',
+          type: court.type || 'football',
+          maxPlayersPerTeam: court.maxPlayersPerTeam || 6
+        },
+        workingHours: {
+          monday: { isOpen: true, start: '04:00', end: '23:30' },
+          tuesday: { isOpen: true, start: '04:00', end: '23:30' },
+          wednesday: { isOpen: true, start: '04:00', end: '23:30' },
+          thursday: { isOpen: true, start: '04:00', end: '23:30' },
+          friday: { isOpen: true, start: '04:00', end: '23:30' },
+          saturday: { isOpen: true, start: '04:00', end: '23:30' },
+          sunday: { isOpen: true, start: '04:00', end: '23:30' }
+        },
+        pricing: { basePrice: court.pricePerHour || 15 }
+      });
+      await calendarConfig.save();
+    }
+
+    // Get working hours for the requested day
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayOfWeek = dayNames[requestedDate.getDay()];
+    const workingHours = calendarConfig.getWorkingHoursForDay(dayOfWeek);
+
+    if (!workingHours.isOpen) {
+      return res.json({
+        success: true,
+        allSlots: [],
+        court: {
+          name: court.name,
+          type: court.type,
+          matchTime: matchDuration
+        },
+        date,
+        workingHours,
+        matchDuration,
+        message: `Court is closed on ${dayOfWeek}`
+      });
+    }
+
+    // Get all slots with their booking status
+    const allSlotsWithStatus = await Booking.getAllSlotsWithStatus(courtId, requestedDate, workingHours, matchDuration);
+
+    // Add pricing information to each slot
+    const slotsWithPricingAndStatus = allSlotsWithStatus.map(slot => {
+      const slotPrice = calendarConfig.calculatePrice(requestedDate, slot.startTime, slot.endTime, court);
+      
+      return {
+        ...slot,
+        price: slotPrice,
+        priceLabel: `${slotPrice} DT`,
+        durationLabel: `${matchDuration}min`,
+        status: slot.isBooked ? 'booked' : 'available',
+        style: slot.isBooked ? 'booked' : 'available', // For frontend styling
+        bookingDetails: slot.booking // Map booking info to bookingDetails for frontend
+      };
+    });
+
+    res.json({
+      success: true,
+      allSlots: slotsWithPricingAndStatus,
+      court: {
+        name: court.name,
+        type: court.type,
+        matchTime: matchDuration
+      },
+      date,
+      workingHours,
+      matchDuration,
+      availableCount: slotsWithPricingAndStatus.filter(slot => slot.isAvailable).length,
+      bookedCount: slotsWithPricingAndStatus.filter(slot => slot.isBooked).length,
+      message: `Court schedule for ${requestedDate.toDateString()}`
+    });
+
+  } catch (error) {
+    console.error('Get slots with status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get court schedule',
       error: error.message
     });
   }

@@ -250,18 +250,28 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
       setLoading(true);
       const dateStr = selectedDate.toISOString().split('T')[0];
       
-      // Fetch only available slots from API (booked slots are filtered out on backend)
-      const response = await fetch(`${process.env.REACT_APP_BOOKING_SERVICE_URL || 'http://localhost:5005/api'}/bookings/available-slots/${court._id}?date=${dateStr}`, {
+      console.log('🔍 Fetching slots for date:', dateStr);
+      console.log('🏟️ Court ID:', court._id);
+      
+      // Fetch all slots with their booking status (available/booked) for visual indicators
+      const apiUrl = `${process.env.REACT_APP_BOOKING_SERVICE_URL || 'http://localhost:5005/api'}/bookings/slots-with-status/${court._id}/${dateStr}`;
+      console.log('📡 API URL:', apiUrl);
+      
+      const response = await fetch(apiUrl, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
       });
+      
+      console.log('📋 Response status:', response.status);
       const data = await response.json();
+      console.log('📊 API Response:', data);
       
       if (data.success) {
-        // Use only the availableSlots array (booked slots are already filtered out)
-        setAvailableSlots(data.availableSlots || []);
-        console.log(`📅 Loaded ${data.availableSlots?.length || 0} available slots for ${dateStr}`);
+        // Set all slots (both available and booked) for visual display
+        setAvailableSlots(data.allSlots || []);
+        console.log(`📅 Loaded ${data.allSlots?.length || 0} total slots (${data.availableCount} available, ${data.bookedCount} booked) for ${dateStr}`);
+        console.log('🎯 First few slots:', data.allSlots?.slice(0, 3));
       } else {
         console.warn('❌ API failed, falling back to manual slot generation');
         // Fallback to generating slots manually if API fails
@@ -672,38 +682,62 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
         {/* Time slots grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {availableSlots.map((slot, index) => {
-            // Since we only get available slots from API, all slots are selectable
+            // Check slot booking status from API data
             const startTime = slot.startTime || slot.time;
             const isSelected = selectedSlot?.startTime === startTime;
             const endTime = calculateEndTime(startTime, duration);
+            const isBooked = slot.isBooked === true || slot.status === 'booked' || slot.isAvailable === false;
+            const isAvailable = !isBooked;
+            
+            // Debug logging
+            console.log(`Slot ${startTime}:`, {
+              isBooked: slot.isBooked,
+              status: slot.status,
+              isAvailable: slot.isAvailable,
+              calculated_isBooked: isBooked,
+              calculated_isAvailable: isAvailable
+            });
             
             return (
               <motion.button
                 key={index}
-                onClick={() => handleSlotSelect(slot)}
-                whileHover={{ scale: 1.02, y: -2 }}
-                whileTap={{ scale: 0.98 }}
+                onClick={() => isAvailable ? handleSlotSelect(slot) : null}
+                disabled={isBooked}
+                whileHover={isAvailable ? { scale: 1.02, y: -2 } : {}}
+                whileTap={isAvailable ? { scale: 0.98 } : {}}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
                 className={`
                   relative p-4 rounded-xl border-2 transition-all duration-300 group overflow-hidden
-                  ${isSelected
-                    ? 'bg-gradient-to-br from-blue-500 to-blue-600 border-blue-400 text-white shadow-lg shadow-blue-500/25 transform scale-105'
-                    : 'bg-gradient-to-br from-white/5 to-white/10 border-white/20 text-white hover:border-blue-400/50 hover:bg-gradient-to-br hover:from-blue-500/10 hover:to-blue-600/10'
+                  ${isBooked
+                    ? 'bg-gradient-to-br from-red-500/20 to-red-600/20 border-red-500/50 text-red-300 cursor-not-allowed opacity-75'
+                    : isSelected
+                      ? 'bg-gradient-to-br from-blue-500 to-blue-600 border-blue-400 text-white shadow-lg shadow-blue-500/25 transform scale-105'
+                      : 'bg-gradient-to-br from-white/5 to-white/10 border-white/20 text-white hover:border-blue-400/50 hover:bg-gradient-to-br hover:from-blue-500/10 hover:to-blue-600/10 cursor-pointer'
                   }
                 `}
               >
                 {/* Background pattern */}
                 <div className="absolute inset-0 opacity-10">
-                  <div className="absolute inset-0 bg-gradient-to-br from-blue-400/20 to-purple-500/20"></div>
+                  <div className={`absolute inset-0 ${
+                    isBooked 
+                      ? 'bg-gradient-to-br from-red-400/20 to-red-500/20'
+                      : 'bg-gradient-to-br from-blue-400/20 to-purple-500/20'
+                  }`}></div>
                 </div>
                 
                 {/* Content */}
                 <div className="relative z-10">
                   <div className="flex items-center justify-between mb-2">
-                    <Clock size={16} className={isSelected ? 'text-white' : 'text-blue-400'} />
-                    {isSelected && (
+                    <Clock size={16} className={
+                      isBooked 
+                        ? 'text-red-400' 
+                        : isSelected 
+                          ? 'text-white' 
+                          : 'text-blue-400'
+                    } />
+                    {isSelected && !isBooked && (
                       <motion.div
                         initial={{ scale: 0, rotate: -180 }}
                         animate={{ scale: 1, rotate: 0 }}
@@ -712,21 +746,55 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
                         <CheckCircle size={16} className="text-white" />
                       </motion.div>
                     )}
+                    {isBooked && (
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: "spring", duration: 0.6 }}
+                      >
+                        <X size={16} className="text-red-400" />
+                      </motion.div>
+                    )}
                   </div>
                   
                   <div className="text-left">
                     <div className="font-bold text-lg mb-1">
                       {convertTo12Hour(startTime)}
                     </div>
-                    <div className={`text-sm ${isSelected ? 'text-white/90' : 'text-white/60'}`}>
+                    <div className={`text-sm ${
+                      isBooked 
+                        ? 'text-red-300/90'
+                        : isSelected 
+                          ? 'text-white/90' 
+                          : 'text-white/60'
+                    }`}>
                       {`to ${endTime}`}
                     </div>
-                    <div className={`text-xs mt-2 ${isSelected ? 'text-white/80' : 'text-white/50'}`}>
+                    <div className={`text-xs mt-2 ${
+                      isBooked
+                        ? 'text-red-300/80'
+                        : isSelected 
+                          ? 'text-white/80' 
+                          : 'text-white/50'
+                    }`}>
                       {duration} minutes
                     </div>
-                    {slot.price && (
-                      <div className={`text-xs mt-1 font-medium ${isSelected ? 'text-white' : 'text-green-400'}`}>
-                        {slot.priceLabel || `${slot.price} DT`}
+                    {/* Show booking status */}
+                    {isBooked && slot.bookingDetails && (
+                      <div className="text-xs mt-2 space-y-1">
+                        <div className="text-red-300/90 font-medium">
+                          Booked by {slot.bookingDetails.teamName || slot.bookingDetails.playerName || 'Player'}
+                        </div>
+                        {slot.bookingDetails.teamName && (
+                          <div className="text-red-300/70 text-xs">
+                            Team booking
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {isBooked && !slot.bookingDetails && (
+                      <div className="text-xs mt-2 text-red-300/90 font-medium">
+                        Already booked
                       </div>
                     )}
                   </div>
@@ -751,6 +819,10 @@ const BookingCalendar = ({ court, isOpen, onClose, onBookingComplete }) => {
           <div className="flex items-center text-sm text-white/60">
             <div className="w-3 h-3 bg-white/20 rounded-full mr-2"></div>
             Available
+          </div>
+          <div className="flex items-center text-sm text-white/60">
+            <div className="w-3 h-3 bg-gradient-to-br from-red-500 to-red-600 rounded-full mr-2"></div>
+            Booked
           </div>
           <div className="flex items-center text-sm text-white/60">
             <Timer size={14} className="mr-2 text-green-400" />
