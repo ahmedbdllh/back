@@ -1,0 +1,119 @@
+/* App.css - Global styles and animations */
+
+.App {
+  text-align: center;
+}
+
+/* Enhanced scrollbar styles for player list */
+.player-list-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.player-list-scroll::-webkit-scrollbar-track {
+  background: rgba(71, 85, 105, 0.3);
+  border-radius: 10px;
+}
+
+.player-list-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6);
+  border-radius: 10px;
+  border: 2px solid rgba(71, 85, 105, 0.3);
+}
+
+.player-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+}
+
+/* Custom scrollbar for compact design */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(115, 115, 115, 0.6) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(115, 115, 115, 0.6);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(115, 115, 115, 0.8);
+}
+
+/* Player card hover animations */
+.player-card.dragging {
+  opacity: 0.8;
+  transform: rotate(5deg) scale(1.05);
+  z-index: 1000;
+}
+
+/* General dragging state for any draggable element */
+.dragging {
+  opacity: 0.8;
+  transform: rotate(2deg) scale(1.02);
+  z-index: 1000;
+}
+
+/* Enhanced shadow utilities */
+.shadow-3xl {
+  box-shadow: 0 35px 60px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Gradient text utilities */
+.gradient-text-sky {
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-emerald {
+  background: linear-gradient(135deg, #10b981, #059669);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Animation for floating elements */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Pulse animation for status indicators */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.1);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Compact card styling */
+.compact-card {
+  font-size: 0.875rem;
+}
+
+/* Add any global styles here */
