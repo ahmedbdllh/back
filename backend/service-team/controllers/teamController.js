@@ -1695,6 +1695,13 @@ exports.makeOffer = async (req, res) => {
     const userId = req.user.userId;
     const { targetTeamId, proposedTime, proposedDate, court, sport, message } = req.body;
 
+    console.log(`🎯 MAKING OFFER:`);
+    console.log(`   Requester User ID: ${userId}`);
+    console.log(`   Target Team ID: ${targetTeamId}`);
+    console.log(`   Proposed Time: ${proposedTime}`);
+    console.log(`   Proposed Date: ${proposedDate}`);
+    console.log(`   Sport: ${sport}`);
+
     // Validate required fields
     if (!targetTeamId || !proposedTime || !proposedDate || !sport) {
       return res.status(400).json({ 
@@ -1761,6 +1768,12 @@ exports.makeOffer = async (req, res) => {
     targetTeam.offers.push(offer);
     await targetTeam.save();
 
+    console.log(`📨 Offer created successfully!`);
+    console.log(`   From: ${userTeam.name} (ID: ${userTeam._id})`);
+    console.log(`   To: ${targetTeam.name} (ID: ${targetTeam._id})`);
+    console.log(`   Captain: ${targetTeam.captain}`);
+    console.log(`   Offers count: ${targetTeam.offers.length}`);
+
     // TODO: Send notification to target team members
     // This would integrate with your notification service
     
@@ -1789,6 +1802,9 @@ exports.getTeamOffers = async (req, res) => {
   try {
     const userId = req.user.userId;
     
+    console.log(`📥 GETTING OFFERS:`);
+    console.log(`   Requester User ID: ${userId}`);
+    
     // Find user's team
     const team = await Team.findOne({
       $or: [
@@ -1798,12 +1814,29 @@ exports.getTeamOffers = async (req, res) => {
     });
 
     if (!team) {
+      console.log(`   ❌ No team found for user: ${userId}`);
       return res.status(404).json({ error: 'No team found for this user' });
     }
 
-    const offers = team.offers || [];
+    const allOffers = team.offers || [];
+    // Filter to only return pending offers for notifications
+    const pendingOffers = allOffers.filter(offer => offer.status === 'pending');
     
-    res.json({ offers });
+    console.log(`   ✅ Team found: ${team.name} (ID: ${team._id})`);
+    console.log(`   Captain: ${team.captain}`);
+    console.log(`   User is captain: ${team.captain.toString() === userId}`);
+    console.log(`   Total offers count: ${allOffers.length}`);
+    console.log(`   Pending offers count: ${pendingOffers.length}`);
+    if (pendingOffers.length > 0) {
+      console.log(`   Pending Offers:`, pendingOffers.map(o => ({
+        from: o.fromTeam?.name,
+        time: o.proposedTime,
+        date: o.proposedDate,
+        status: o.status
+      })));
+    }
+    
+    res.json({ offers: pendingOffers });
   } catch (err) {
     console.error('Error getting team offers:', err);
     res.status(500).json({ error: err.message });
@@ -1860,6 +1893,10 @@ exports.acceptOffer = async (req, res) => {
     const userId = req.user.userId;
     const { offerId } = req.params;
 
+    console.log(`🎯 ACCEPT OFFER DEBUG:`);
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Offer ID: ${offerId}`);
+
     // Find user's team (must be captain or member)
     const team = await Team.findOne({
       $or: [
@@ -1869,25 +1906,37 @@ exports.acceptOffer = async (req, res) => {
     });
 
     if (!team) {
+      console.log(`❌ No team found for user: ${userId}`);
       return res.status(404).json({ error: 'No team found for this user' });
     }
 
+    console.log(`✅ Team found: ${team.name} (ID: ${team._id})`);
+    console.log(`   Captain: ${team.captain}`);
+    console.log(`   Offers count: ${team.offers?.length || 0}`);
+
     // Check if user is captain (only captains can accept offers)
     if (team.captain.toString() !== userId) {
+      console.log(`❌ User is not captain. Captain: ${team.captain}, User: ${userId}`);
       return res.status(403).json({ error: 'Only team captains can accept offers' });
     }
 
     // Find the specific offer
     const offerIndex = team.offers.findIndex(offer => offer._id.toString() === offerId);
     
+    console.log(`🔍 Looking for offer ID: ${offerId}`);
+    console.log(`   Available offers:`, team.offers.map(o => ({ id: o._id.toString(), status: o.status })));
+    
     if (offerIndex === -1) {
+      console.log(`❌ Offer not found with ID: ${offerId}`);
       return res.status(404).json({ error: 'Offer not found' });
     }
 
     const offer = team.offers[offerIndex];
+    console.log(`✅ Offer found:`, offer);
 
     // Check if offer is still pending
     if (offer.status !== 'pending') {
+      console.log(`❌ Offer status is ${offer.status}, not pending`);
       return res.status(400).json({ error: `Offer has already been ${offer.status}` });
     }
 
@@ -1897,23 +1946,53 @@ exports.acceptOffer = async (req, res) => {
     
     await team.save();
 
-    console.log(`✅ Offer accepted by ${team.name} from ${offer.fromTeam.name}`);
+    // Find the offering team
+    const offeringTeam = await Team.findById(offer.fromTeam.id);
+    
+    if (offeringTeam) {
+      // Create a chat between the two team captains
+      const chatController = require('./chatController');
+      const chat = await chatController.createMatchChat(offer, offeringTeam, team);
+      
+      console.log(`✅ Offer accepted by ${team.name} from ${offer.fromTeam.name}`);
+      console.log(`💬 Chat created: ${chat.chatId}`);
 
-    res.json({ 
-      message: 'Offer accepted successfully',
-      offer: {
-        fromTeam: offer.fromTeam.name,
-        toTeam: team.name,
-        proposedDate: offer.proposedDate,
-        proposedTime: offer.proposedTime,
-        court: offer.court,
-        sport: offer.sport,
-        status: 'accepted'
-      }
-    });
+      res.json({ 
+        message: 'Offer accepted successfully',
+        offer: {
+          fromTeam: offer.fromTeam.name,
+          toTeam: team.name,
+          proposedDate: offer.proposedDate,
+          proposedTime: offer.proposedTime,
+          court: offer.court,
+          sport: offer.sport,
+          status: 'accepted'
+        },
+        chat: {
+          chatId: chat.chatId,
+          message: 'A chat has been created for match coordination'
+        }
+      });
+    } else {
+      console.log(`✅ Offer accepted by ${team.name} but offering team not found`);
+      res.json({ 
+        message: 'Offer accepted successfully',
+        offer: {
+          fromTeam: offer.fromTeam.name,
+          toTeam: team.name,
+          proposedDate: offer.proposedDate,
+          proposedTime: offer.proposedTime,
+          court: offer.court,
+          sport: offer.sport,
+          status: 'accepted'
+        }
+      });
+    }
 
   } catch (err) {
     console.error('Error accepting offer:', err);
+    console.error('Error stack:', err.stack);
+    console.error('Error message:', err.message);
     res.status(500).json({ error: err.message });
   }
 };

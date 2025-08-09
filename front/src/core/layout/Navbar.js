@@ -7,6 +7,7 @@ import { AuthModal } from "../../shared/ui/components/AuthModal"
 import { Logo } from "../../shared/ui/components/Logo"
 import { Avatar } from "../../shared/ui/components/Avatar"
 import NotificationBell from "../../components/NotificationBell"
+import ChatList from "../../components/ChatList"
 import { getImageUrl, handleImageError } from "../../shared/utils/imageUtils"
 
 // Lazy load auth components to prevent reCAPTCHA from loading globally
@@ -264,6 +265,17 @@ export const Navbar = () => {
                   role: userRole,
                   profileImage: userProfileImage // This will be handled with getImageUrl in NotificationBell or where it's used
                 }} />
+                
+                {/* Chat List - Only for Players with team captain role */}
+                {userRole === 'Player' && (
+                  <ChatList user={{
+                    id: (JSON.parse(localStorage.getItem("user") || '{}')).id || '',
+                    fullName: userName,
+                    email: (JSON.parse(localStorage.getItem("user") || '{}')).email || '',
+                    role: userRole,
+                    profileImage: userProfileImage
+                  }} />
+                )}
                 
                 {/* Look for a team button - only for Players */}
                 {userRole === 'Player' && (

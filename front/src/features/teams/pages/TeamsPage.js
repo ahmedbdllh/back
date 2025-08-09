@@ -23,6 +23,133 @@ const TeamsPage = () => {
   // Toast notifications
   const { toasts, success, error: showError, info, removeToast } = useToast();
 
+  // Debug functions
+  const createTestOffer = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post('http://localhost:5004/api/teams/debug/create-test-offer', {}, {
+        headers: { 'x-auth-token': token }
+      });
+      
+      success(`Test offer created! ${response.data.fromTeam} → ${response.data.toTeam}`);
+      info('Check the notification bell to see the new offer (you might need to switch between users)');
+    } catch (err) {
+      console.error('Error creating test offer:', err);
+      showError(err.response?.data?.error || 'Failed to create test offer');
+    }
+  };
+
+  const clearOffers = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.delete('http://localhost:5004/api/teams/debug/clear-offers', {
+        headers: { 'x-auth-token': token }
+      });
+      
+      success(response.data.message);
+      info('All offers cleared from your team');
+    } catch (err) {
+      console.error('Error clearing offers:', err);
+      showError(err.response?.data?.error || 'Failed to clear offers');
+    }
+  };
+
+  const testOfferAcceptance = async () => {
+    try {
+      info('Testing full offer acceptance flow...');
+      
+      // Step 1: Create test offer
+      const token = localStorage.getItem('token');
+      const createResponse = await axios.post('http://localhost:5004/api/teams/debug/create-test-offer', {}, {
+        headers: { 'x-auth-token': token }
+      });
+      
+      success(`✅ Step 1: Test offer created (${createResponse.data.fromTeam} → ${createResponse.data.toTeam})`);
+      
+      // Step 2: Get the created offer
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      
+      const offersResponse = await axios.get('http://localhost:5004/api/teams/offers/received', {
+        headers: { 'x-auth-token': token }
+      });
+      
+      const pendingOffers = offersResponse.data.offers.filter(offer => offer.status === 'pending');
+      
+      if (pendingOffers.length === 0) {
+        showError('No pending offers found to test with');
+        return;
+      }
+      
+      const testOffer = pendingOffers[0];
+      info(`📋 Step 2: Found test offer ID: ${testOffer._id}`);
+      
+      // Step 3: Accept the offer
+      await axios.put(`http://localhost:5004/api/teams/offers/${testOffer._id}/accept`, {}, {
+        headers: { 'x-auth-token': token }
+      });
+      
+      success('✅ Step 3: Offer accepted successfully!');
+      
+      // Step 4: Check for created chat
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      
+      const chatsResponse = await axios.get('http://localhost:5004/api/teams/chats', {
+        headers: { 'x-auth-token': token }
+      });
+      
+      if (chatsResponse.data.chats && chatsResponse.data.chats.length > 0) {
+        success(`✅ Step 4: Chat created successfully! Found ${chatsResponse.data.chats.length} chat(s)`);
+        info('💬 Check the chat icon in the navigation bar to see the new chat');
+      } else {
+        showError('❌ Step 4: No chats found after accepting offer');
+      }
+      
+      success('🎉 Full test completed! Check the chat icon in the navigation bar.');
+      
+    } catch (err) {
+      console.error('Error in test flow:', err);
+      showError(`Test failed: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
+  const testChatSystem = async () => {
+    try {
+      info('Testing chat system...');
+      const token = localStorage.getItem('token');
+      
+      // Step 1: Test the debug endpoint (no auth required)
+      try {
+        const debugResponse = await axios.get('http://localhost:5004/api/teams/debug/test-chat');
+        success(`✅ Debug endpoint: ${debugResponse.data.message}`);
+        info(`📊 Total chats in DB: ${debugResponse.data.totalChats}`);
+      } catch (debugErr) {
+        showError(`❌ Debug endpoint failed: ${debugErr.message}`);
+      }
+      
+      // Step 2: Test user chats endpoint
+      try {
+        const chatsResponse = await axios.get('http://localhost:5004/api/teams/chats', {
+          headers: { 'x-auth-token': token }
+        });
+        success(`✅ User chats loaded: ${chatsResponse.data.chats?.length || 0} chats found`);
+        
+        if (chatsResponse.data.chats && chatsResponse.data.chats.length > 0) {
+          info(`💬 Chat details: ${chatsResponse.data.chats.map(c => `ID: ${c.chatId}`).join(', ')}`);
+        }
+      } catch (chatErr) {
+        console.error('Chat fetch error details:', chatErr.response?.data);
+        showError(`❌ Chat fetch failed: ${chatErr.response?.data?.error || chatErr.message}`);
+        return;
+      }
+      
+      success('🎉 Chat system test completed!');
+      
+    } catch (err) {
+      console.error('Error testing chat system:', err);
+      showError(`Chat test failed: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
   useEffect(() => {
     fetchTeams();
     // Only try to get user team if we have a token
@@ -561,6 +688,46 @@ Time: ${searchForm.time}
           </div>
         </div>
       )}
+      
+      {/* Debug Section */}
+      <div className="mt-8 bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+        <h3 className="text-lg font-semibold text-white mb-3 flex items-center">
+          <span className="mr-2">🧪</span>
+          Debug Tools
+        </h3>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={createTestOffer}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+          >
+            Create Test Offer
+          </button>
+          <button
+            onClick={clearOffers}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+          >
+            Clear All Offers
+          </button>
+          <button
+            onClick={testOfferAcceptance}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium"
+          >
+            🧪 Test Full Flow
+          </button>
+          <button
+            onClick={testChatSystem}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+          >
+            💬 Test Chat System
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-gray-400">
+          <p>• Create Test Offer: Creates a fresh offer from your team to another team</p>
+          <p>• Clear All Offers: Removes all pending offers from your team</p>
+          <p>• Test Full Flow: Creates offer, accepts it, and creates chat (all in one)</p>
+          <p>• Test Chat System: Tests chat fetching and creation directly</p>
+        </div>
+      </div>
       
       {/* Toast Container */}
       <ToastContainer toasts={toasts} removeToast={removeToast} />

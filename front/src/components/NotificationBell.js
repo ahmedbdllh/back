@@ -35,7 +35,9 @@ const NotificationBell = ({ user }) => {
         const offersResponse = await axios.get('http://localhost:5004/api/teams/offers/received', {
           headers: { 'x-auth-token': token }
         });
-        setTeamOffers(offersResponse.data.offers || []);
+        // Filter to only show pending offers
+        const pendingOffers = (offersResponse.data.offers || []).filter(offer => offer.status === 'pending');
+        setTeamOffers(pendingOffers);
       } catch (offerErr) {
         console.warn('Could not fetch team offers:', offerErr);
         setTeamOffers([]);
@@ -183,6 +185,15 @@ const NotificationBell = ({ user }) => {
       setTeamOffers(teamOffers.filter(offer => offer._id !== offerId));
     } catch (err) {
       console.error('Error accepting offer:', err);
+      console.error('Error response data:', err.response?.data);
+      console.error('Error response status:', err.response?.status);
+      
+      // Show the specific error message from the server
+      const errorMessage = err.response?.data?.error || err.message || 'Failed to accept offer';
+      console.error('Specific error message:', errorMessage);
+      
+      // You can add a toast notification here to show the error to the user
+      // Toast.error(errorMessage);
     } finally {
       setProcessing(prev => ({ ...prev, [offerId]: null }));
     }
